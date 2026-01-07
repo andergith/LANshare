@@ -306,7 +306,7 @@
                 
                 this.myId = generateFriendlyId();
                 // PeerJS Config: debug 2 muestra advertencias, 3 todo.
-                this.peer = new Peer(this.myId, { debug: 1 });
+                this.peer = new Peer(this.myId, { debug: 2 });
 
                 this.peer.on('open', (id) => {
                     this.log(`Peer local iniciado. ID: ${id}`, 'success');
@@ -338,8 +338,9 @@
                 
                 // Evento CRÍTICO: Cuando alguien se conecta a mí
                 this.peer.on('connection', (conn) => {
-                    // Limpieza de conexiones fantasma
-                    if (this.conn && this.conn.open) {
+                    // Si ya hay una conexión abierta y distinta, cerramos.
+                    // Si es un reintento del mismo peer, PeerJS suele manejarlo.
+                    if (this.conn && this.conn.open && this.conn.peer !== conn.peer) {
                         this.log("Cerrando conexión previa...", 'warn');
                         this.conn.close();
                     }
@@ -347,16 +348,21 @@
                     this.conn = conn;
                     this.log(`Intento de conexión desde: ${conn.peer}`, 'info');
 
-                    // Esperamos a que el canal esté totalmente abierto
-                    conn.on('open', () => {
+                    // Definimos los eventos
+                    const bindEvents = () => {
                         this.log("Canal de datos abierto (Emisor).", 'success');
                         this.setupConnectionEvents();
-                        // No mostramos DropZone todavía. Esperamos el 'hello' del receptor
-                        // para confirmar que puede recibir datos.
-                    });
+                        // Ping preventivo para despertar conexiones NAT
+                        this.sendData({ type: 'hello' }); 
+                    };
+
+                    if (conn.open) {
+                        bindEvents();
+                    } else {
+                        conn.on('open', bindEvents);
+                    }
                     
-                    // Fallback por si el evento open ya ocurrió
-                    if(conn.open) this.setupConnectionEvents();
+                    conn.on('error', (err) => this.log(`Error en conexión entrante: ${err}`, 'error'));
                 });
             },
 
@@ -375,17 +381,16 @@
             },
 
             connectToPeer: function() {
-                const remoteId = document.getElementById('remote-id-input').value.trim().toUpperCase(); // Normalizamos a mayúsculas
+                const remoteId = document.getElementById('remote-id-input').value.trim().toUpperCase(); 
                 if (!remoteId) return alert('Por favor, introduce el ID del Emisor');
 
                 const btn = document.getElementById('btn-connect');
                 btn.disabled = true;
                 btn.innerHTML = '<i class="ph-bold ph-spinner animate-spin"></i> Conectando...';
 
-                // CORRECCIÓN: Quitamos .toLowerCase() para respetar las mayúsculas del ID
+                // CORRECCIÓN: Quitamos reliable: true y usamos binary serialization
                 this.conn = this.peer.connect(remoteId, {
-                    reliable: true,
-                    serialization: 'binary' // Optimización para archivos
+                    serialization: 'binary'
                 });
                 
                 this.conn.on('open', () => {
@@ -401,19 +406,30 @@
                     document.getElementById('receiver-waiting').classList.add('flex');
                     this.showConnectedStatus();
                 });
+                
+                this.conn.on('error', (err) => {
+                     this.log(`Error al conectar: ${err}`, 'error');
+                     btn.disabled = false;
+                     btn.textContent = 'Reintentar Conexión';
+                });
 
-                // Watchdog para timeout
+                // Watchdog para timeout (aumentado a 15s)
                 setTimeout(() => {
                     if (!this.conn || !this.conn.open) {
                         btn.disabled = false;
                         btn.textContent = 'Conectar Dispositivo';
-                        this.log("Tiempo de espera agotado. ¿El ID es correcto?", 'error');
+                        this.log("Tiempo de espera agotado. Verifica cortafuegos/red.", 'error');
                     }
-                }, 10000); // 10s timeout
+                }, 15000); 
             },
 
             // --- Gestión Común de Eventos ---
             setupConnectionEvents: function() {
+                // Evitamos duplicar eventos si se llama varias veces
+                this.conn.off('data'); 
+                this.conn.off('close');
+                this.conn.off('error');
+
                 this.showConnectedStatus();
                 
                 this.conn.on('data', (data) => this.handleData(data));
@@ -439,16 +455,17 @@
 
             // --- MÁQUINA DE ESTADOS (Recepción de Datos) ---
             handleData: async function(data) {
-                // Bloque Try-Catch para evitar errores silenciosos
                 try {
-                    // console.log("Datos recibidos:", data); // Debug interno
-
                     if (data.type === 'hello') {
-                        // [EMISOR] Recibe saludo del receptor
-                        this.log("Handshake completado. Receptor listo.", 'success');
-                        document.getElementById('sender-id-wrapper').classList.add('hidden');
-                        document.getElementById('drop-zone').classList.remove('hidden');
-                        document.getElementById('drop-zone').classList.add('flex');
+                        // [AMBOS] Reciben saludo. 
+                        // El emisor desbloquea UI, el receptor confirma conexión.
+                        this.log("Handshake completado.", 'success');
+                        
+                        if (this.role === 'sender') {
+                            document.getElementById('sender-id-wrapper').classList.add('hidden');
+                            document.getElementById('drop-zone').classList.remove('hidden');
+                            document.getElementById('drop-zone').classList.add('flex');
+                        }
                         
                     } else if (data.type === 'meta') {
                         // [RECEPTOR] Recibe metadatos del archivo
@@ -468,8 +485,6 @@
                             document.getElementById('ram-warning').classList.add('hidden');
                         }
 
-                        // FORZAR VISIBILIDAD (Solución al bug "No button")
-                        // Usamos z-index alto y position absolute en CSS, pero aseguramos JS aquí.
                         this.showView('view-accept'); 
 
                     } else if (data.type === 'ready-ack') {
