@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LAN Drop - Streaming a Disco</title>
+    <title>LANshare - Streaming a Disco</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PeerJS -->
@@ -39,7 +39,7 @@
         <div class="p-6 border-b border-slate-700 flex justify-between items-center bg-slate-800/90 sticky top-0 z-10">
             <div class="flex items-center gap-2">
                 <i class="ph-fill ph-paper-plane-tilt text-blue-400 text-2xl"></i>
-                <h1 class="text-xl font-bold tracking-tight">LAN Drop</h1>
+                <h1 class="text-xl font-bold tracking-tight">LANshare</h1>
             </div>
             <div id="connection-status" class="hidden text-xs font-mono bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full flex items-center gap-1">
                 <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
@@ -59,7 +59,7 @@
                         <i class="ph ph-upload-simple text-xl"></i>
                     </div>
                     <h3 class="text-lg font-semibold text-white mb-1">Enviar Ficheros</h3>
-                    <p class="text-slate-400 text-xs">Sube archivos a la red local.</p>
+                    <p class="text-slate-400 text-xs">Crea una sala y comparte tu ID.</p>
                 </button>
 
                 <button onclick="app.setRole('receiver')" class="group relative p-6 rounded-xl bg-slate-700/50 hover:bg-emerald-600/20 border border-slate-600 hover:border-emerald-500 transition-all duration-300 text-left">
@@ -67,29 +67,32 @@
                         <i class="ph ph-download-simple text-xl"></i>
                     </div>
                     <h3 class="text-lg font-semibold text-white mb-1">Recibir Ficheros</h3>
-                    <p class="text-slate-400 text-xs">Descarga directa a disco (si es compatible).</p>
+                    <p class="text-slate-400 text-xs">Conecta al emisor para descargar.</p>
                 </button>
             </div>
 
-            <!-- 2. Receptor (Esperando) -->
+            <!-- 2. Receptor (Formulario de Conexión - MOVIDO AQUÍ) -->
             <div id="view-receiver" class="hidden flex-col h-full items-center justify-center text-center gap-6">
-                <div class="relative">
-                    <div class="absolute inset-0 bg-emerald-500 blur-xl opacity-20 animate-pulse-slow"></div>
-                    <div class="relative bg-slate-900 p-4 rounded-xl border border-slate-700 shadow-xl">
-                        <p class="text-xs text-slate-400 uppercase tracking-widest mb-2">Tu ID de Receptor</p>
-                        <div class="flex items-center gap-2 bg-black/30 p-3 rounded-lg border border-slate-700/50">
-                            <code id="my-peer-id" class="text-2xl font-mono text-emerald-400 font-bold tracking-wider">...</code>
-                            <button onclick="app.copyId()" class="p-2 hover:bg-white/10 rounded transition-colors text-slate-400 hover:text-white" title="Copiar">
-                                <i class="ph ph-copy"></i>
-                            </button>
-                        </div>
+                 <div id="receiver-connect-form" class="flex flex-col gap-4 w-full">
+                    <label class="text-sm text-slate-300 font-medium">Introduce el ID del Emisor:</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="remote-id-input" placeholder="Ej: azul-lobo-99" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono uppercase text-white placeholder-slate-600 transition-all">
+                        <button onclick="app.connectToPeer()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-6 rounded-lg font-medium transition-colors disabled:opacity-50 shadow-lg shadow-emerald-900/20" id="btn-connect">
+                            Conectar
+                        </button>
                     </div>
+                    <p class="text-[10px] text-slate-500">Pide al emisor que te diga su código.</p>
                 </div>
-                <p class="text-slate-400 text-sm max-w-xs mx-auto">
-                    Comparte este ID con el emisor. <br>
-                    <span class="text-emerald-400 text-xs mt-2 block opacity-80" id="disk-support-msg">Verificando soporte de disco...</span>
-                </p>
-                <button onclick="location.reload()" class="text-slate-500 hover:text-white text-xs mt-4 underline">Cancelar</button>
+
+                <div id="receiver-waiting" class="hidden flex-col items-center gap-4 animate-pulse">
+                    <div class="text-emerald-400 font-medium">✅ Conectado con el Emisor</div>
+                    <p class="text-slate-400 text-sm">Esperando a que envíe el archivo...</p>
+                </div>
+
+                <div class="text-center mt-4">
+                     <span class="text-emerald-400 text-xs block opacity-80" id="disk-support-msg">Verificando soporte de disco...</span>
+                </div>
+                <button onclick="location.reload()" class="text-slate-500 hover:text-white text-xs mt-8 underline">Cancelar y volver</button>
             </div>
 
             <!-- 2b. Receptor (Aceptación de archivo) -->
@@ -116,18 +119,30 @@
                 </p>
             </div>
 
-            <!-- 3. Emisor -->
-            <div id="view-sender" class="hidden flex-col h-full gap-4">
-                <div id="connect-form" class="flex flex-col gap-4">
-                    <label class="text-sm text-slate-300 font-medium">Introduce el ID del receptor:</label>
-                    <div class="flex gap-2">
-                        <input type="text" id="remote-id-input" placeholder="Ej: azul-gato-99" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500 font-mono uppercase text-white placeholder-slate-600">
-                        <button onclick="app.connectToPeer()" class="bg-blue-600 hover:bg-blue-500 text-white px-6 rounded-lg font-medium transition-colors disabled:opacity-50" id="btn-connect">
-                            Conectar
-                        </button>
+            <!-- 3. Emisor (ID Display + Drop Zone - MOVIDO AQUÍ) -->
+            <div id="view-sender" class="hidden flex-col h-full gap-4 justify-center">
+                
+                <!-- ID Card (Visible inicialmente) -->
+                <div id="sender-id-wrapper" class="flex flex-col items-center gap-6 w-full fade-in">
+                    <div class="relative w-full flex flex-col items-center">
+                        <div class="absolute inset-0 bg-blue-500 blur-xl opacity-20 animate-pulse-slow"></div>
+                        <div class="relative bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-xl w-full max-w-xs text-center">
+                            <p class="text-xs text-slate-400 uppercase tracking-widest mb-2">Tu ID de Emisor</p>
+                            <div class="flex items-center justify-center gap-2 bg-black/30 p-3 rounded-lg border border-slate-700/50">
+                                <code id="my-peer-id" class="text-2xl font-mono text-blue-400 font-bold tracking-wider">...</code>
+                                <button onclick="app.copyId()" class="p-2 hover:bg-white/10 rounded transition-colors text-slate-400 hover:text-white" title="Copiar">
+                                    <i class="ph ph-copy"></i>
+                                </button>
+                            </div>
+                        </div>
                     </div>
+                    <p class="text-slate-400 text-sm max-w-xs text-center">
+                        Comparte este ID con el receptor para que se conecte a ti. Esperando conexión...
+                    </p>
+                    <button onclick="location.reload()" class="text-slate-500 hover:text-white text-xs mt-4 underline">Cancelar</button>
                 </div>
 
+                <!-- Drop Zone (Oculta hasta conectar) -->
                 <div id="drop-zone" class="hidden flex-1 border-2 border-dashed border-slate-600 rounded-xl bg-slate-800/30 hover:bg-slate-800/50 transition-all flex-col items-center justify-center p-6 text-center cursor-pointer group relative">
                     <input type="file" id="file-input" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onchange="app.handleFileSelect(this)">
                     <div class="w-16 h-16 bg-slate-700 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
@@ -135,6 +150,7 @@
                     </div>
                     <h3 class="text-lg font-medium text-white">Elige un archivo</h3>
                     <p class="text-sm text-slate-400 mt-1">o arrástralo aquí</p>
+                    <p class="text-xs text-emerald-400 mt-4 font-bold animate-pulse">● Receptor Conectado</p>
                 </div>
                 
                 <!-- Estado de espera para el emisor -->
@@ -224,22 +240,42 @@
 
             init: function() {
                 this.log("Iniciando aplicación...");
-                // Verificar soporte de File System Access API
                 this.supportsFileSystem = 'showSaveFilePicker' in window;
             },
 
             setRole: function(role) {
                 this.role = role;
                 this.hideAllViews();
+                
+                // Generamos ID para ambos roles, aunque solo el Sender lo muestra
                 this.myId = generateFriendlyId();
                 this.peer = new Peer(this.myId);
 
                 this.peer.on('open', (id) => {
-                    this.log(`Peer conectado: ${id}`);
-                    if (role === 'receiver') {
-                        this.showView('view-receiver');
+                    this.log(`Peer local iniciado: ${id}`);
+                    
+                    if (role === 'sender') {
+                        // SENDER: Muestra ID y espera conexión pasivamente
+                        this.showView('view-sender');
                         document.getElementById('my-peer-id').textContent = id;
                         
+                        // Listener para cuando el Receptor se conecte
+                        this.peer.on('connection', (conn) => {
+                            this.conn = conn;
+                            this.log("Receptor conectado: " + conn.peer);
+                            this.setupConnectionEvents();
+                            
+                            // Cambiar UI del sender para mostrar DropZone
+                            document.getElementById('sender-id-wrapper').classList.add('hidden');
+                            document.getElementById('drop-zone').classList.remove('hidden');
+                            document.getElementById('drop-zone').classList.add('flex');
+                        });
+
+                    } else {
+                        // RECEIVER: Muestra formulario para conectar al Sender
+                        this.showView('view-receiver');
+                        
+                        // Check soporte disco para mostrar aviso
                         const msg = document.getElementById('disk-support-msg');
                         if (this.supportsFileSystem) {
                             msg.textContent = "✅ Soporte Disco Directo Activado";
@@ -249,8 +285,6 @@
                             msg.className = "text-yellow-500 text-xs mt-2 block opacity-80";
                         }
                         this.initReceiver();
-                    } else {
-                        this.showView('view-sender');
                     }
                 });
 
@@ -260,39 +294,49 @@
                 });
             },
 
-            // --- RECEPTOR ---
+            // --- RECEPTOR (Lógica de conexión activa) ---
             initReceiver: function() {
-                this.peer.on('connection', (conn) => {
-                    this.conn = conn;
-                    this.setupConnectionEvents();
-                });
+                // El receptor ya no espera pasivamente conexión en 'init', 
+                // sino que la inicia en connectToPeer()
             },
 
-            // --- EMISOR ---
             connectToPeer: function() {
+                // Ahora esta función la ejecuta el RECEPTOR
                 const remoteId = document.getElementById('remote-id-input').value.trim().toLowerCase();
-                if (!remoteId) return alert('Introduce ID');
+                if (!remoteId) return alert('Introduce el ID del Emisor');
 
                 const btn = document.getElementById('btn-connect');
                 btn.disabled = true;
-                btn.textContent = '...';
+                btn.textContent = 'Conectando...';
 
                 this.conn = this.peer.connect(remoteId);
+                
                 this.conn.on('open', () => {
-                    this.log("Conectado con " + remoteId);
+                    this.log("Conectado con Emisor: " + remoteId);
                     this.setupConnectionEvents();
-                    document.getElementById('connect-form').classList.add('hidden');
-                    document.getElementById('drop-zone').classList.remove('hidden');
-                    document.getElementById('drop-zone').classList.add('flex');
+                    
+                    // UI Receptor: Esperando archivo
+                    document.getElementById('receiver-connect-form').classList.add('hidden');
+                    document.getElementById('receiver-waiting').classList.remove('hidden');
+                    document.getElementById('receiver-waiting').classList.add('flex');
                     this.showConnectedStatus();
                 });
+                
+                // Timeout por si falla
+                setTimeout(() => {
+                    if (!this.conn.open) {
+                        btn.disabled = false;
+                        btn.textContent = 'Reintentar Conexión';
+                        this.log("Tiempo de espera agotado al conectar", 'error');
+                    }
+                }, 5000);
             },
 
             setupConnectionEvents: function() {
                 this.showConnectedStatus();
                 this.conn.on('data', (data) => this.handleData(data));
                 this.conn.on('close', () => {
-                    alert("Conexión perdida.");
+                    alert("Conexión perdida con el otro dispositivo.");
                     location.reload();
                 });
             },
@@ -300,26 +344,27 @@
             // --- GESTIÓN DE DATOS (MÁQUINA DE ESTADOS) ---
             handleData: async function(data) {
                 if (data.type === 'meta') {
-                    // Paso 1: Llega oferta de archivo
+                    // RECEPTOR: Llega oferta de archivo
                     this.fileMeta = data;
+                    this.hideAllViews(); // Ocultar espera
                     this.showView('view-accept');
                     document.getElementById('accept-filename').textContent = data.name;
                     document.getElementById('accept-filesize').textContent = formatBytes(data.size);
                     this.log(`Oferta recibida: ${data.name}`);
 
                 } else if (data.type === 'ready-ack') {
-                    // Paso 3 (Emisor): El receptor aceptó, empezamos a enviar
+                    // SENDER: El receptor aceptó, empezamos a enviar
                     this.log("Receptor listo. Iniciando envío...");
                     document.getElementById('sender-waiting-approval').classList.add('hidden');
                     this.showView('view-progress');
                     this.sendChunks();
 
                 } else if (data.type === 'chunk') {
-                    // Paso 4 (Receptor): Recibiendo datos
+                    // RECEPTOR: Recibiendo datos
                     this.processChunk(data.data);
 
                 } else if (data.type === 'end') {
-                    // Paso 5: Fin
+                    // RECEPTOR: Fin
                     this.finishReception();
                 }
             },
@@ -330,10 +375,8 @@
                 this.fileChunks = [];
                 this.writeQueue = Promise.resolve();
 
-                // Intentar usar File System Access API
                 if (this.supportsFileSystem) {
                     try {
-                        // Pedir al usuario dónde guardar
                         this.fileHandle = await window.showSaveFilePicker({
                             suggestedName: this.fileMeta.name
                         });
@@ -342,8 +385,6 @@
                         this.setStorageBadge(true);
                     } catch (err) {
                         console.error(err);
-                        this.log("Usuario canceló o error en FS. Usando RAM.", 'error');
-                        // Fallback a RAM si cancela o falla, pero seguimos adelante
                         this.supportsFileSystem = false; 
                         this.setStorageBadge(false);
                     }
@@ -351,14 +392,13 @@
                     this.setStorageBadge(false);
                 }
 
-                // Configurar UI
                 this.showView('view-progress');
                 document.getElementById('file-name-display').textContent = this.fileMeta.name;
                 document.getElementById('file-size-display').textContent = formatBytes(this.fileMeta.size);
                 document.getElementById('status-message').textContent = "Recibiendo...";
                 this.startTime = Date.now();
 
-                // Avisar al Emisor que estamos listos
+                // Avisar al Emisor
                 this.conn.send({ type: 'ready-ack' });
             },
 
@@ -368,27 +408,20 @@
                 this.updateProgress(this.receivedSize, this.fileMeta.size);
 
                 if (this.supportsFileSystem && this.writableStream) {
-                    // Escribir a disco (encolado para evitar race conditions)
                     this.writeQueue = this.writeQueue.then(() => 
                         this.writableStream.write(chunkData)
-                    ).catch(err => {
-                        this.log("Error escritura disco: " + err, 'error');
-                        // En caso catastrófico de disco, podríamos intentar fallback a RAM, 
-                        // pero con archivos grandes ya habríamos perdido el inicio.
-                    });
+                    ).catch(err => console.error("Write error", err));
                 } else {
-                    // Guardar en RAM
                     this.fileChunks.push(chunkData);
                 }
             },
 
             finishReception: async function() {
                 if (this.supportsFileSystem && this.writableStream) {
-                    await this.writeQueue; // Esperar últimas escrituras
+                    await this.writeQueue;
                     await this.writableStream.close();
-                    this.log("Archivo guardado en disco correctamente.");
+                    this.log("Archivo guardado en disco.");
                 } else {
-                    // Reensamblar RAM
                     this.log("Reensamblando en RAM...");
                     const blob = new Blob(this.fileChunks, { type: this.fileMeta.mime });
                     const url = URL.createObjectURL(blob);
@@ -412,7 +445,6 @@
                 if (!file) return;
                 this.file = file;
                 
-                // Enviar solo META primero
                 this.conn.send({
                     type: 'meta',
                     name: this.file.name,
@@ -420,7 +452,6 @@
                     mime: this.file.type
                 });
 
-                // Mostrar estado "Esperando"
                 document.getElementById('drop-zone').classList.add('hidden');
                 document.getElementById('drop-zone').classList.remove('flex');
                 document.getElementById('sender-waiting-approval').classList.remove('hidden');
@@ -428,7 +459,6 @@
             },
 
             sendChunks: function() {
-                // Configurar UI Emisor
                 document.getElementById('file-name-display').textContent = this.file.name;
                 document.getElementById('file-size-display').textContent = formatBytes(this.file.size);
                 
