@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LANshare - MQTT v5 (Nucleo Robusto)</title>
+    <title>LANshare - MQTT v5.1 (Bulletproof)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- MQTT.js -->
@@ -42,7 +42,7 @@
                 </div>
                 <div>
                     <h1 class="text-xl font-bold tracking-tight text-white leading-none">LANshare</h1>
-                    <span class="text-[10px] text-slate-400 font-mono">v5.0 &bull; Arquitectura Industrial</span>
+                    <span class="text-[10px] text-slate-400 font-mono">v5.1 &bull; Stable Core</span>
                 </div>
             </div>
             <div id="connection-status" class="hidden text-[10px] font-mono bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-full flex items-center gap-2 border border-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
@@ -223,7 +223,7 @@
         <!-- Debug Console -->
         <div class="bg-black/90 p-3 h-32 overflow-y-auto no-scrollbar border-t border-slate-800 text-[10px] font-mono text-slate-400 select-text rounded-b-xl">
             <div id="logs" class="flex flex-col gap-1.5">
-                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1 font-bold">[Sistema] Motor WebRTC v5.0 (Strict Mode) inicializado.</div>
+                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1 font-bold">[Sistema] Motor WebRTC v5.1 (Bulletproof) listo.</div>
             </div>
         </div>
     </div>
@@ -239,11 +239,9 @@
                 // Google
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' },
-                // Twilio
-                { urls: 'stun:global.stun.twilio.com:3478' }
+                // Otros proveedores para redundancia
+                { urls: 'stun:stun.ekiga.net' },
+                { urls: 'stun:stun.ideasip.com' }
             ]
         };
 
@@ -273,8 +271,9 @@
             
             peerConnection: null,
             dataChannel: null,
-            iceCandidateQueue: [], // Cola crítica
-            isRemoteDescriptionSet: false, // Flag de control
+            iceCandidateQueue: [], 
+            isRemoteDescriptionSet: false, 
+            isNegotiating: false, // BLOQUEO PARA EVITAR BUCLES
             
             file: null,
             fileMeta: null,
@@ -312,7 +311,7 @@
             },
 
             checkDiskSupport: function() {
-                 const msg = document.getElementById('disk-support-msg'); // No existe en esta vista, pero mantenemos lógica
+                 const msg = document.getElementById('disk-support-msg'); 
             },
 
             connectAsReceiver: function() {
@@ -369,25 +368,30 @@
 
             /* --- WEBRTC (CORE) --- */
             initWebRTC: function() {
+                if(this.peerConnection) return; // EVITAR REINICIOS
+
                 this.log("Inicializando RTCPeerConnection...", 'info');
                 this.iceCandidateQueue = []; 
                 this.isRemoteDescriptionSet = false;
+                this.isNegotiating = false;
                 
-                // Configuración agresiva para STUN
                 this.peerConnection = new RTCPeerConnection({
                     iceServers: APP_CONFIG.ICE_SERVERS,
                     iceTransportPolicy: 'all',
-                    iceCandidatePoolSize: 10
+                    sdpSemantics: 'unified-plan'
                 });
 
                 this.peerConnection.onicecandidate = (event) => {
                     if (event.candidate) {
-                        const type = event.candidate.candidate.includes('srflx') ? 'PUBLIC' : 'LOCAL';
-                        // this.log(`Candidato generado (${type})`, 'system');
+                        // Diagnóstico de IPs
+                        const ip = event.candidate.address || event.candidate.ip || 'anónima';
+                        const type = event.candidate.type; 
+                        this.log(`Candidato encontrado: ${type} (${ip})`, 'system'); // Log clave
+
                         const target = this.role === 'sender' ? 'to-receiver' : 'to-sender';
                         this.mqttPublish(`lanshare/${this.roomId}/${target}`, {
                             type: 'candidate',
-                            candidate: event.candidate
+                            candidate: event.candidate.toJSON() // Serialización segura
                         });
                     }
                 };
@@ -399,9 +403,8 @@
                     if(state === 'connected') {
                         this.onWebRTCConnected();
                     } else if (state === 'failed') {
-                        this.log("Fallo WebRTC. ¿NAT Simétrica detectada?", 'error');
-                        alert("Fallo de conexión P2P. Es probable que tu red bloquee conexiones directas (NAT Simétrica). Intenta usar datos móviles o otra red.");
-                        location.reload();
+                        this.log("Fallo WebRTC. Revisa si hay candidatos HOST o SRFLX.", 'error');
+                        // Opcional: restartIce()
                     }
                 };
 
@@ -431,10 +434,13 @@
                 document.getElementById('connection-status').classList.add('flex');
             },
 
-            /* --- NEGOCIACIÓN PERFECTA (SIN TIMEOUTS) --- */
+            /* --- NEGOCIACIÓN --- */
             handleSignalingData: async function(data) {
                 try {
                     if (data.type === 'hello' && this.role === 'sender') {
+                        if(this.isNegotiating) return; // Evitar loops
+                        this.isNegotiating = true;
+
                         this.log("Receptor listo. Iniciando oferta...", 'info');
                         this.initWebRTC(); 
                         const offer = await this.peerConnection.createOffer();
@@ -443,16 +449,12 @@
 
                     } else if (data.type === 'offer' && this.role === 'receiver') {
                         this.log("Oferta recibida. Configurando remoto...", 'info');
+                        this.initWebRTC(); // Asegurar init en receptor
                         
-                        // 1. Set Remote
                         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
                         this.isRemoteDescriptionSet = true;
-                        this.log("Remoto configurado. Procesando cola ICE...", 'info');
-                        
-                        // 2. Flush ICE Queue
                         await this.processIceQueue();
                         
-                        // 3. Create Answer
                         const answer = await this.peerConnection.createAnswer();
                         await this.peerConnection.setLocalDescription(answer);
                         this.mqttPublish(`lanshare/${this.roomId}/to-sender`, { type: 'answer', answer: answer });
@@ -460,19 +462,18 @@
                     } else if (data.type === 'answer' && this.role === 'sender') {
                         this.log("Respuesta recibida. Finalizando handshake...", 'info');
                         
-                        // 1. Set Remote
                         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
                         this.isRemoteDescriptionSet = true;
-                        
-                        // 2. Flush ICE Queue
                         await this.processIceQueue();
 
                     } else if (data.type === 'candidate') {
+                        // Construir objeto Candidato explícito
+                        const candidate = new RTCIceCandidate(data.candidate);
+                        
                         if (this.isRemoteDescriptionSet) {
-                            await this.peerConnection.addIceCandidate(data.candidate);
+                            await this.peerConnection.addIceCandidate(candidate);
                         } else {
-                            // this.log("Encolando candidato (Espera SDP)", 'system');
-                            this.iceCandidateQueue.push(data.candidate);
+                            this.iceCandidateQueue.push(candidate);
                         }
                     }
                 } catch (e) {
