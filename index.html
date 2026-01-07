@@ -71,7 +71,7 @@
                 </button>
             </div>
 
-            <!-- 2. Receptor (Formulario de Conexión - MOVIDO AQUÍ) -->
+            <!-- 2. Receptor (Formulario de Conexión) -->
             <div id="view-receiver" class="hidden flex-col h-full items-center justify-center text-center gap-6">
                  <div id="receiver-connect-form" class="flex flex-col gap-4 w-full">
                     <label class="text-sm text-slate-300 font-medium">Introduce el ID del Emisor:</label>
@@ -96,7 +96,7 @@
             </div>
 
             <!-- 2b. Receptor (Aceptación de archivo) -->
-            <div id="view-accept" class="hidden flex-col h-full items-center justify-center text-center gap-6 fade-in">
+            <div id="view-accept" class="hidden flex-col h-full items-center justify-center text-center gap-6 fade-in z-50">
                 <div class="w-20 h-20 bg-blue-500/20 text-blue-400 rounded-full flex items-center justify-center animate-bounce">
                     <i class="ph-fill ph-file-arrow-down text-4xl"></i>
                 </div>
@@ -107,7 +107,7 @@
                 </div>
                 
                 <div class="flex flex-col gap-3 w-full max-w-xs">
-                    <button onclick="app.acceptTransfer()" class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2">
+                    <button onclick="app.acceptTransfer()" class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/50">
                         <i class="ph-bold ph-floppy-disk"></i> Guardar y Recibir
                     </button>
                     <button onclick="location.reload()" class="w-full py-3 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors">
@@ -119,7 +119,7 @@
                 </p>
             </div>
 
-            <!-- 3. Emisor (ID Display + Drop Zone - MOVIDO AQUÍ) -->
+            <!-- 3. Emisor (ID Display + Drop Zone) -->
             <div id="view-sender" class="hidden flex-col h-full gap-4 justify-center">
                 
                 <!-- ID Card (Visible inicialmente) -->
@@ -137,7 +137,7 @@
                         </div>
                     </div>
                     <p class="text-slate-400 text-sm max-w-xs text-center">
-                        Comparte este ID con el receptor para que se conecte a ti. Esperando conexión...
+                        Comparte este ID con el receptor. Esperando conexión...
                     </p>
                     <button onclick="location.reload()" class="text-slate-500 hover:text-white text-xs mt-4 underline">Cancelar</button>
                 </div>
@@ -150,7 +150,7 @@
                     </div>
                     <h3 class="text-lg font-medium text-white">Elige un archivo</h3>
                     <p class="text-sm text-slate-400 mt-1">o arrástralo aquí</p>
-                    <p class="text-xs text-emerald-400 mt-4 font-bold animate-pulse">● Receptor Conectado</p>
+                    <p class="text-xs text-emerald-400 mt-4 font-bold animate-pulse">● Conexión Lista</p>
                 </div>
                 
                 <!-- Estado de espera para el emisor -->
@@ -249,7 +249,9 @@
                 
                 // Generamos ID para ambos roles, aunque solo el Sender lo muestra
                 this.myId = generateFriendlyId();
-                this.peer = new Peer(this.myId);
+                this.peer = new Peer(this.myId, {
+                    debug: 1 // Niveles de error
+                });
 
                 this.peer.on('open', (id) => {
                     this.log(`Peer local iniciado: ${id}`);
@@ -261,14 +263,13 @@
                         
                         // Listener para cuando el Receptor se conecte
                         this.peer.on('connection', (conn) => {
+                            if (this.conn && this.conn.open) {
+                                this.conn.close(); // Cerrar conexiones previas
+                            }
                             this.conn = conn;
-                            this.log("Receptor conectado: " + conn.peer);
+                            this.log("Conexión entrante detectada...");
                             this.setupConnectionEvents();
-                            
-                            // Cambiar UI del sender para mostrar DropZone
-                            document.getElementById('sender-id-wrapper').classList.add('hidden');
-                            document.getElementById('drop-zone').classList.remove('hidden');
-                            document.getElementById('drop-zone').classList.add('flex');
+                            // NO mostramos DropZone todavía. Esperamos el saludo 'hello'.
                         });
 
                     } else {
@@ -294,14 +295,10 @@
                 });
             },
 
-            // --- RECEPTOR (Lógica de conexión activa) ---
-            initReceiver: function() {
-                // El receptor ya no espera pasivamente conexión en 'init', 
-                // sino que la inicia en connectToPeer()
-            },
+            initReceiver: function() {},
 
             connectToPeer: function() {
-                // Ahora esta función la ejecuta el RECEPTOR
+                // Ejecutado por RECEPTOR
                 const remoteId = document.getElementById('remote-id-input').value.trim().toLowerCase();
                 if (!remoteId) return alert('Introduce el ID del Emisor');
 
@@ -309,27 +306,30 @@
                 btn.disabled = true;
                 btn.textContent = 'Conectando...';
 
-                this.conn = this.peer.connect(remoteId);
+                this.conn = this.peer.connect(remoteId, {
+                    reliable: true
+                });
                 
                 this.conn.on('open', () => {
-                    this.log("Conectado con Emisor: " + remoteId);
+                    this.log("Conectado con Emisor. Enviando saludo...");
+                    // ENVIAR SALUDO PARA CONFIRMAR CANAL
+                    this.conn.send({ type: 'hello' });
+
                     this.setupConnectionEvents();
                     
-                    // UI Receptor: Esperando archivo
                     document.getElementById('receiver-connect-form').classList.add('hidden');
                     document.getElementById('receiver-waiting').classList.remove('hidden');
                     document.getElementById('receiver-waiting').classList.add('flex');
                     this.showConnectedStatus();
                 });
                 
-                // Timeout por si falla
                 setTimeout(() => {
                     if (!this.conn.open) {
                         btn.disabled = false;
                         btn.textContent = 'Reintentar Conexión';
-                        this.log("Tiempo de espera agotado al conectar", 'error');
+                        this.log("Timeout al conectar", 'error');
                     }
-                }, 5000);
+                }, 8000);
             },
 
             setupConnectionEvents: function() {
@@ -339,33 +339,49 @@
                     alert("Conexión perdida con el otro dispositivo.");
                     location.reload();
                 });
+                // Fix para Sender: a veces el evento open salta tarde en el lado pasivo
+                this.conn.on('open', () => {
+                    this.log("Canal de datos abierto.");
+                });
             },
 
             // --- GESTIÓN DE DATOS (MÁQUINA DE ESTADOS) ---
             handleData: async function(data) {
-                if (data.type === 'meta') {
-                    // RECEPTOR: Llega oferta de archivo
-                    this.fileMeta = data;
-                    this.hideAllViews(); // Ocultar espera
-                    this.showView('view-accept');
-                    document.getElementById('accept-filename').textContent = data.name;
-                    document.getElementById('accept-filesize').textContent = formatBytes(data.size);
-                    this.log(`Oferta recibida: ${data.name}`);
+                try {
+                    // console.log("Datos recibidos:", data); // Debug
 
-                } else if (data.type === 'ready-ack') {
-                    // SENDER: El receptor aceptó, empezamos a enviar
-                    this.log("Receptor listo. Iniciando envío...");
-                    document.getElementById('sender-waiting-approval').classList.add('hidden');
-                    this.showView('view-progress');
-                    this.sendChunks();
+                    if (data.type === 'hello') {
+                        // SENDER: Recibimos saludo, el canal es bidireccional.
+                        this.log("Receptor confirmado y listo.");
+                        document.getElementById('sender-id-wrapper').classList.add('hidden');
+                        document.getElementById('drop-zone').classList.remove('hidden');
+                        document.getElementById('drop-zone').classList.add('flex');
+                        
+                    } else if (data.type === 'meta') {
+                        // RECEPTOR: Llega oferta de archivo
+                        this.log(`Oferta de archivo recibida: ${data.name}`);
+                        this.fileMeta = data;
+                        this.hideAllViews(); 
+                        this.showView('view-accept');
+                        document.getElementById('accept-filename').textContent = data.name;
+                        document.getElementById('accept-filesize').textContent = formatBytes(data.size);
 
-                } else if (data.type === 'chunk') {
-                    // RECEPTOR: Recibiendo datos
-                    this.processChunk(data.data);
+                    } else if (data.type === 'ready-ack') {
+                        // SENDER: El receptor aceptó
+                        this.log("Receptor aceptó. Iniciando envío...");
+                        document.getElementById('sender-waiting-approval').classList.add('hidden');
+                        this.showView('view-progress');
+                        this.sendChunks();
 
-                } else if (data.type === 'end') {
-                    // RECEPTOR: Fin
-                    this.finishReception();
+                    } else if (data.type === 'chunk') {
+                        this.processChunk(data.data);
+
+                    } else if (data.type === 'end') {
+                        this.finishReception();
+                    }
+                } catch (e) {
+                    this.log("Error procesando datos: " + e.message, 'error');
+                    console.error(e);
                 }
             },
 
@@ -385,6 +401,9 @@
                         this.setStorageBadge(true);
                     } catch (err) {
                         console.error(err);
+                        this.log("Usuario canceló guardado o error FS.", 'error');
+                        // No cancelamos, hacemos fallback a RAM si es posible o simplemente avisamos
+                        // En este caso, asumimos fallback a RAM
                         this.supportsFileSystem = false; 
                         this.setStorageBadge(false);
                     }
@@ -398,7 +417,6 @@
                 document.getElementById('status-message').textContent = "Recibiendo...";
                 this.startTime = Date.now();
 
-                // Avisar al Emisor
                 this.conn.send({ type: 'ready-ack' });
             },
 
@@ -410,7 +428,10 @@
                 if (this.supportsFileSystem && this.writableStream) {
                     this.writeQueue = this.writeQueue.then(() => 
                         this.writableStream.write(chunkData)
-                    ).catch(err => console.error("Write error", err));
+                    ).catch(err => {
+                        console.error("Error escritura disco", err);
+                        this.log("Error escritura: " + err.message, 'error');
+                    });
                 } else {
                     this.fileChunks.push(chunkData);
                 }
@@ -445,6 +466,11 @@
                 if (!file) return;
                 this.file = file;
                 
+                if (!this.conn || !this.conn.open) {
+                    alert("Error: La conexión parece haberse perdido. Por favor reconecta.");
+                    return;
+                }
+
                 this.conn.send({
                     type: 'meta',
                     name: this.file.name,
