@@ -382,7 +382,8 @@
                 btn.disabled = true;
                 btn.innerHTML = '<i class="ph-bold ph-spinner animate-spin"></i> Conectando...';
 
-                this.conn = this.peer.connect(remoteId.toLowerCase(), {
+                // CORRECCIÓN: Quitamos .toLowerCase() para respetar las mayúsculas del ID
+                this.conn = this.peer.connect(remoteId, {
                     reliable: true,
                     serialization: 'binary' // Optimización para archivos
                 });
