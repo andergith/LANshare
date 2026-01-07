@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LANshare - Transferencia Segura</title>
+    <title>LANshare - MQTT Protocol</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- PeerJS (Versión estable) -->
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- MQTT.js: Librería robusta para señalización -->
+    <script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
     <!-- Iconos Phosphor -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <!-- Google Fonts -->
@@ -48,32 +48,37 @@
                 <div class="bg-indigo-500/20 p-2 rounded-lg">
                     <i class="ph-fill ph-paper-plane-tilt text-indigo-400 text-xl"></i>
                 </div>
-                <h1 class="text-xl font-bold tracking-tight text-white">LANshare</h1>
+                <h1 class="text-xl font-bold tracking-tight text-white">LANshare <span class="text-[10px] bg-indigo-600 px-1 rounded text-white opacity-70">MQTT</span></h1>
             </div>
             <div id="connection-status" class="hidden text-[10px] font-mono bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-full flex items-center gap-2 border border-emerald-500/20">
                 <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-                CONECTADO
+                P2P ACTIVO
             </div>
         </div>
 
         <!-- VISTAS DE LA APP -->
         <main class="flex-1 relative p-6 overflow-hidden">
             
-            <!-- 0. Pantalla de Carga (Nueva) -->
-            <div id="view-loading" class="hidden flex-col items-center justify-center h-full text-center gap-6 fade-in z-50 absolute inset-0 bg-slate-800/95">
-                <div class="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                <div>
-                    <h3 class="text-lg font-bold text-white mb-1">Iniciando Red...</h3>
-                    <p class="text-slate-400 text-xs">Conectando con el servidor de señalización.</p>
+            <!-- 0. Pantalla de Carga (Overlay) -->
+            <div id="view-loading" class="hidden flex-col items-center justify-center h-full text-center gap-6 fade-in z-50 absolute inset-0 bg-slate-900/95 backdrop-blur-sm">
+                <div class="relative">
+                    <div class="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <i class="ph-fill ph-broadcast text-indigo-500 animate-pulse"></i>
+                    </div>
                 </div>
-                <button onclick="location.reload()" class="mt-8 text-xs text-slate-500 hover:text-white underline">Cancelar (Recargar)</button>
+                <div>
+                    <h3 class="text-lg font-bold text-white mb-1" id="loading-title">Conectando...</h3>
+                    <p class="text-slate-400 text-xs font-mono" id="loading-status">Inicializando Broker MQTT</p>
+                </div>
+                <button onclick="location.reload()" class="mt-8 text-xs text-slate-500 hover:text-white underline">Cancelar</button>
             </div>
 
             <!-- 1. Inicio -->
             <div id="view-home" class="flex flex-col gap-4 h-full justify-center fade-in">
                 <div class="text-center mb-6">
-                    <h2 class="text-2xl font-bold text-white">Bienvenido</h2>
-                    <p class="text-slate-400 text-sm mt-2">Transfiere archivos sin límites en tu red local.</p>
+                    <h2 class="text-2xl font-bold text-white">Modo Robusto</h2>
+                    <p class="text-slate-400 text-sm mt-2">Sistema de alta fiabilidad vía MQTT + WebRTC.</p>
                 </div>
                 
                 <button onclick="app.setRole('sender')" class="group relative p-5 rounded-xl bg-slate-700/30 hover:bg-indigo-600/20 border border-slate-600 hover:border-indigo-500 transition-all duration-300 text-left hover:shadow-lg hover:shadow-indigo-500/10">
@@ -81,7 +86,7 @@
                         <i class="ph ph-upload-simple text-xl"></i>
                     </div>
                     <h3 class="text-lg font-semibold text-white mb-1">Enviar Ficheros</h3>
-                    <p class="text-slate-400 text-xs leading-relaxed max-w-[80%]">Crear una sala segura para compartir documentos, fotos o vídeos.</p>
+                    <p class="text-slate-400 text-xs leading-relaxed max-w-[80%]">Crear canal seguro y esperar conexión.</p>
                 </button>
 
                 <button onclick="app.setRole('receiver')" class="group relative p-5 rounded-xl bg-slate-700/30 hover:bg-emerald-600/20 border border-slate-600 hover:border-emerald-500 transition-all duration-300 text-left hover:shadow-lg hover:shadow-emerald-500/10">
@@ -89,76 +94,27 @@
                         <i class="ph ph-download-simple text-xl"></i>
                     </div>
                     <h3 class="text-lg font-semibold text-white mb-1">Recibir Ficheros</h3>
-                    <p class="text-slate-400 text-xs leading-relaxed max-w-[80%]">Conectar mediante código y guardar directamente en disco.</p>
+                    <p class="text-slate-400 text-xs leading-relaxed max-w-[80%]">Introducir código para enlazar.</p>
                 </button>
             </div>
 
             <!-- 2. Receptor (Formulario de Conexión) -->
             <div id="view-receiver" class="hidden flex-col h-full items-center justify-center text-center gap-8 fade-in">
-                 <div id="receiver-connect-form" class="flex flex-col gap-5 w-full max-w-sm">
+                 <div class="flex flex-col gap-5 w-full max-w-sm">
                     <div class="text-left">
-                        <label class="text-xs text-indigo-300 font-bold uppercase tracking-wider mb-2 block">ID del Emisor</label>
-                        <div class="flex gap-2">
-                            <input type="text" id="remote-id-input" placeholder="Ej: ROJO-LOBO-99" class="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono uppercase text-white placeholder-slate-600 transition-all text-lg">
+                        <label class="text-xs text-indigo-300 font-bold uppercase tracking-wider mb-2 block">ID de la Sala</label>
+                        <div class="flex gap-2 relative">
+                            <input type="text" id="remote-id-input" placeholder="Ej: ROJO-LOBO-99" class="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono uppercase text-white placeholder-slate-600 transition-all text-lg pl-10">
+                            <div class="absolute left-3 top-4 text-slate-500">
+                                <i class="ph-bold ph-hash"></i>
+                            </div>
                         </div>
                     </div>
-                    <button onclick="app.connectToPeer()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-3.5 rounded-lg font-bold transition-all shadow-lg shadow-emerald-900/20 active:scale-[0.98]" id="btn-connect">
-                        Conectar Dispositivo
-                    </button>
-                    <p class="text-[10px] text-slate-500 bg-slate-800/50 p-3 rounded border border-slate-700">
-                        <i class="ph-fill ph-info mr-1"></i> El emisor debe estar en la pantalla "Enviar Ficheros" para ver su código.
-                    </p>
-                </div>
-
-                <div id="receiver-waiting" class="hidden flex-col items-center gap-6 animate-pulse w-full">
-                    <div class="w-20 h-20 bg-emerald-500/10 rounded-full flex items-center justify-center border border-emerald-500/20">
-                        <i class="ph-fill ph-plugs-connected text-4xl text-emerald-400"></i>
-                    </div>
-                    <div>
-                        <h3 class="text-lg font-bold text-emerald-400">Conexión Establecida</h3>
-                        <p class="text-slate-400 text-sm mt-1">Esperando a que el emisor envíe el archivo...</p>
-                    </div>
-                </div>
-
-                <div class="text-center mt-auto border-t border-slate-700/50 pt-4 w-full">
-                     <span class="text-emerald-400 text-[10px] uppercase font-bold tracking-widest opacity-80" id="disk-support-msg">...</span>
-                </div>
-                <button onclick="location.reload()" class="text-slate-500 hover:text-white text-xs mt-4 underline decoration-slate-600 underline-offset-4">Cancelar y volver</button>
-            </div>
-
-            <!-- 2b. Receptor (Aceptación de archivo - SUPERPOSICIÓN CRÍTICA) -->
-            <div id="view-accept" class="hidden absolute inset-0 bg-slate-900/95 z-50 flex-col h-full items-center justify-center text-center gap-8 fade-in p-6">
-                <div class="relative">
-                    <div class="absolute -inset-4 bg-indigo-500 blur-2xl opacity-20 animate-pulse"></div>
-                    <div class="w-24 h-24 bg-slate-800 text-indigo-400 rounded-2xl flex items-center justify-center shadow-2xl border border-slate-700 relative">
-                        <i class="ph-fill ph-file-arrow-down text-5xl"></i>
-                    </div>
-                </div>
-                
-                <div>
-                    <h3 class="text-2xl font-bold text-white mb-2">Solicitud de Archivo</h3>
-                    <p class="text-indigo-300 font-medium text-lg break-all px-4" id="accept-filename">archivo.zip</p>
-                    <div class="flex items-center justify-center gap-2 mt-2">
-                        <span class="bg-slate-800 text-slate-400 text-xs px-2 py-1 rounded border border-slate-700" id="accept-filesize">0 MB</span>
-                        <span class="bg-slate-800 text-slate-400 text-xs px-2 py-1 rounded border border-slate-700" id="accept-filetype">UNKNOWN</span>
-                    </div>
-                </div>
-                
-                <div class="flex flex-col gap-3 w-full max-w-xs">
-                    <button onclick="app.acceptTransfer()" class="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all transform hover:-translate-y-1 shadow-xl shadow-indigo-900/30 flex items-center justify-center gap-2">
-                        <i class="ph-bold ph-download-simple"></i> Descargar y Guardar
-                    </button>
-                    <button onclick="location.reload()" class="w-full py-3 bg-transparent border border-slate-600 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-colors text-sm font-medium">
-                        Rechazar Transferencia
+                    <button onclick="app.connectAsReceiver()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-3.5 rounded-lg font-bold transition-all shadow-lg shadow-emerald-900/20 active:scale-[0.98]">
+                        Conectar a Sala
                     </button>
                 </div>
-                
-                <div id="ram-warning" class="hidden bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-lg max-w-xs">
-                    <p class="text-[10px] text-yellow-200 text-left">
-                        <strong class="block mb-1">⚠️ Modo Memoria RAM</strong>
-                        Tu navegador no permite guardar directamente en disco. Si el archivo es muy grande (>500MB), el navegador podría bloquearse.
-                    </p>
-                </div>
+                <button onclick="location.reload()" class="text-slate-500 hover:text-white text-xs mt-4 underline decoration-slate-600 underline-offset-4">Volver atrás</button>
             </div>
 
             <!-- 3. Emisor (ID Display + Drop Zone) -->
@@ -169,53 +125,73 @@
                     <div class="relative w-full flex flex-col items-center">
                         <div class="absolute inset-0 bg-indigo-500 blur-[60px] opacity-10"></div>
                         <div class="relative bg-slate-900/80 p-8 rounded-2xl border border-slate-600 shadow-2xl w-full max-w-xs text-center backdrop-blur-md">
-                            <p class="text-[10px] text-indigo-300 uppercase tracking-widest font-bold mb-4">Tu Código de Emisor</p>
-                            <div class="flex items-center justify-center gap-3 bg-black/40 p-4 rounded-xl border border-slate-700/50 group cursor-pointer" onclick="app.copyId()">
+                            <p class="text-[10px] text-indigo-300 uppercase tracking-widest font-bold mb-4">Código de Sala</p>
+                            <div class="flex items-center justify-center gap-3 bg-black/40 p-4 rounded-xl border border-slate-700/50 group cursor-pointer active:scale-95 transition-transform" onclick="app.copyId()">
                                 <code id="my-peer-id" class="text-3xl font-mono text-white font-bold tracking-wider select-all">...</code>
                                 <i class="ph-bold ph-copy text-slate-500 group-hover:text-white transition-colors"></i>
                             </div>
-                            <p class="text-xs text-slate-500 mt-4">Toca el código para copiarlo</p>
+                            <div class="mt-4 flex items-center justify-center gap-2 text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">
+                                <div class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
+                                Señalización MQTT Activa
+                            </div>
                         </div>
                     </div>
-                    <div class="flex items-center gap-2 text-slate-400 text-sm animate-pulse">
-                        <div class="w-2 h-2 bg-indigo-500 rounded-full"></div>
-                        Esperando conexión del receptor...
-                    </div>
-                    <button onclick="location.reload()" class="text-slate-500 hover:text-white text-xs underline decoration-slate-600 underline-offset-4">Cancelar</button>
+                    <p class="text-slate-400 text-sm animate-pulse">Esperando al receptor...</p>
+                    <button onclick="location.reload()" class="text-slate-500 hover:text-white text-xs underline">Cancelar</button>
                 </div>
 
                 <!-- Drop Zone -->
                 <div id="drop-zone" class="hidden flex-1 border-2 border-dashed border-slate-600 rounded-xl bg-slate-800/30 hover:bg-slate-800/50 hover:border-indigo-500 transition-all flex-col items-center justify-center p-6 text-center cursor-pointer group relative overflow-hidden">
                     <input type="file" id="file-input" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onchange="app.handleFileSelect(this)">
-                    
-                    <div class="absolute inset-0 bg-indigo-500/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
-                    
                     <div class="w-20 h-20 bg-slate-700 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-lg">
                         <i class="ph-fill ph-file-plus text-3xl text-indigo-400"></i>
                     </div>
-                    <h3 class="text-xl font-bold text-white group-hover:text-indigo-300 transition-colors">Elige un archivo</h3>
-                    <p class="text-sm text-slate-400 mt-2">o arrástralo aquí</p>
+                    <h3 class="text-xl font-bold text-white group-hover:text-indigo-300 transition-colors">Elige un fichero</h3>
                     
                     <div class="mt-8 bg-emerald-500/10 px-4 py-2 rounded-full border border-emerald-500/20 flex items-center gap-2">
                         <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-                        <span class="text-xs text-emerald-400 font-bold uppercase tracking-wide">Receptor Conectado</span>
+                        <span class="text-xs text-emerald-400 font-bold uppercase tracking-wide">Enlazado con éxito</span>
                     </div>
                 </div>
                 
-                <!-- Estado de espera para el emisor -->
                 <div id="sender-waiting-approval" class="hidden flex-col items-center justify-center h-full text-center p-6 fade-in">
                     <div class="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-6"></div>
                     <h3 class="text-lg font-bold text-white">Esperando confirmación</h3>
-                    <p class="text-slate-400 text-sm mt-2 max-w-xs">El receptor debe aceptar la descarga en su dispositivo para comenzar la transferencia.</p>
+                    <p class="text-slate-400 text-sm mt-2 max-w-xs">El receptor debe aceptar la descarga.</p>
+                </div>
+            </div>
+
+            <!-- 2b. Aceptación -->
+            <div id="view-accept" class="hidden absolute inset-0 bg-slate-900/95 z-50 flex-col h-full items-center justify-center text-center gap-8 fade-in p-6">
+                <div class="w-24 h-24 bg-slate-800 text-indigo-400 rounded-2xl flex items-center justify-center shadow-2xl border border-slate-700">
+                    <i class="ph-fill ph-file-arrow-down text-5xl"></i>
+                </div>
+                <div>
+                    <h3 class="text-2xl font-bold text-white mb-2">Fichero Entrante</h3>
+                    <p class="text-indigo-300 font-medium text-lg break-all px-4" id="accept-filename">archivo.zip</p>
+                    <div class="flex items-center justify-center gap-2 mt-2">
+                        <span class="bg-slate-800 text-slate-400 text-xs px-2 py-1 rounded border border-slate-700" id="accept-filesize">0 MB</span>
+                    </div>
+                </div>
+                <div class="flex flex-col gap-3 w-full max-w-xs">
+                    <button onclick="app.acceptTransfer()" class="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-900/30">
+                        Descargar
+                    </button>
+                    <button onclick="location.reload()" class="w-full py-3 bg-transparent border border-slate-600 hover:bg-slate-800 text-slate-400 rounded-xl">
+                        Rechazar
+                    </button>
+                </div>
+                 <div id="ram-warning" class="hidden bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-lg max-w-xs">
+                    <p class="text-[10px] text-yellow-200 text-left">
+                        <strong class="block mb-1">⚠️ Modo Memoria RAM</strong>
+                        Sin acceso a disco directo. Archivos >500MB pueden fallar.
+                    </p>
                 </div>
             </div>
 
             <!-- 4. Progreso -->
             <div id="view-progress" class="hidden flex-col h-full justify-center gap-8 fade-in">
                 <div class="text-center">
-                    <div class="w-20 h-20 bg-indigo-500/20 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center mb-4 border border-indigo-500/30 shadow-lg shadow-indigo-900/20">
-                        <i class="ph-fill ph-file text-4xl"></i>
-                    </div>
                     <h3 id="file-name-display" class="font-bold text-white text-lg truncate px-4">documento.zip</h3>
                     <p id="file-size-display" class="text-xs text-slate-400 mt-1 font-mono bg-slate-800 inline-block px-2 py-1 rounded">0 MB</p>
                 </div>
@@ -234,290 +210,398 @@
                     <span id="storage-mode-badge" class="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded-md font-bold transition-all">...</span>
                 </div>
 
-                <p id="status-message" class="text-center text-sm text-indigo-300 animate-pulse font-medium">Iniciando transferencia segura...</p>
+                <p id="status-message" class="text-center text-sm text-indigo-300 animate-pulse font-medium">Transfiriendo...</p>
 
                 <button onclick="location.reload()" id="btn-reset" class="hidden w-full py-3.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl transition-colors font-bold flex items-center justify-center gap-2">
-                    <i class="ph-bold ph-arrow-counter-clockwise"></i> Nueva Transferencia
+                    Nueva Transferencia
                 </button>
             </div>
 
         </main>
 
-        <!-- Logs / Debug Console -->
+        <!-- Debug Console -->
         <div class="bg-black/80 p-3 h-28 overflow-y-auto no-scrollbar border-t border-slate-700/50 text-[10px] font-mono text-slate-400 select-text">
             <div id="logs" class="flex flex-col gap-1.5">
-                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1">[Sistema] LANshare v3.1 listo.</div>
+                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1">[Sistema] Motor MQTT v4.0 inicializado.</div>
             </div>
         </div>
     </div>
 
     <script>
+        /* --- CONFIGURACIÓN TÉCNICA --- */
         const APP_CONFIG = {
+            MQTT_BROKER: 'wss://broker.emqx.io:8084/mqtt', // Broker profesional público SSL
             CHUNK_SIZE: 64 * 1024,
             MAX_BUFFER: 16 * 1024 * 1024,
-            RAM_LIMIT_WARNING: 500 * 1024 * 1024
+            RAM_LIMIT_WARNING: 500 * 1024 * 1024,
+            ICE_SERVERS: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:global.stun.twilio.com:3478' }
+            ]
         };
 
         const ADJECTIVES = ['ROJO', 'AZUL', 'VERDE', 'NEGRO', 'BLANCO', 'RAPIDO', 'LISTO', 'FELIZ', 'BRAVO', 'NOBLE'];
         const NOUNS = ['LOBO', 'GATO', 'OSO', 'HALCON', 'ZORRO', 'LEON', 'TIGRE', 'BUHO', 'DRAGON', 'PANDA'];
         
-        function generateFriendlyId() {
+        function generateId() {
             const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
             const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
             const num = Math.floor(Math.random() * 99) + 1;
             return `${adj}-${noun}-${num}`;
         }
 
-        function formatBytes(bytes, decimals = 2) {
+        function formatBytes(bytes) {
             if (!+bytes) return '0 Bytes';
             const k = 1024;
-            const dm = decimals < 0 ? 0 : decimals;
             const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
         }
 
+        /* --- MOTOR DE APLICACIÓN --- */
         const app = {
-            peer: null,
-            conn: null,
-            myId: null,
-            role: null,
+            // MQTT & Signaling
+            mqttClient: null,
+            roomId: null,
+            role: null, // 'sender' | 'receiver'
+            
+            // WebRTC
+            peerConnection: null,
+            dataChannel: null,
+            
+            // File Handling
             file: null,
+            fileMeta: null,
             fileChunks: [],
             receivedSize: 0,
-            fileMeta: null,
             startTime: 0,
             fileHandle: null,
             writableStream: null,
             writeQueue: Promise.resolve(),
             supportsFileSystem: false,
-            initTimeout: null,
 
             init: function() {
-                this.log("Iniciando aplicación...", 'system');
+                this.log("Iniciando sistema...", 'system');
                 this.supportsFileSystem = 'showSaveFilePicker' in window;
-                window.onbeforeunload = () => {
-                    if (this.conn && this.conn.open) return "Tienes una conexión activa. ¿Seguro que quieres salir?";
-                };
             },
 
+            /* --- FASE 1: INICIALIZACIÓN Y ROL --- */
             setRole: function(role) {
                 this.role = role;
                 this.hideAllViews();
                 
-                // MOSTRAR CARGA INMEDIATA
-                this.showView('view-loading');
-                
-                this.myId = generateFriendlyId();
-                
-                // CONFIGURACIÓN DE PEERJS MEJORADA
-                // Usamos servidores STUN de Google para mejorar conectividad
-                this.peer = new Peer(this.myId, { 
-                    debug: 2,
-                    config: {
-                        iceServers: [
-                            { urls: 'stun:stun1.l.google.com:19302' },
-                            { urls: 'stun:stun2.l.google.com:19302' }
-                        ]
-                    }
-                });
-
-                // TIMEOUT DE SEGURIDAD
-                // Si en 15 segundos no conecta, avisamos.
-                this.initTimeout = setTimeout(() => {
-                    this.log("La conexión al servidor está tardando mucho...", 'warn');
-                    alert("Error: No se ha podido conectar al servidor de señalización. Verifica tu conexión a internet.");
-                    location.reload();
-                }, 15000);
-
-                this.peer.on('open', (id) => {
-                    clearTimeout(this.initTimeout); // Cancelar timeout
-                    this.log(`Peer local iniciado. ID: ${id}`, 'success');
-                    
-                    this.hideAllViews(); // Ocultar carga
-                    if (role === 'sender') {
-                        this.initSenderUI(id);
-                    } else {
-                        this.initReceiverUI();
-                    }
-                });
-
-                this.peer.on('error', (err) => {
-                    clearTimeout(this.initTimeout);
-                    this.log(`Error PeerJS: ${err.type}`, 'error');
-                    let msg = "Error de conexión.";
-                    if (err.type === 'peer-unavailable') msg = "ID no encontrado. Verifica el código.";
-                    if (err.type === 'disconnected') msg = "Desconectado del servidor.";
-                    if (err.type === 'network') msg = "Error de red. Verifica tu conexión.";
-                    alert(msg);
-                    location.reload();
-                });
-            },
-
-            initSenderUI: function(id) {
-                this.showView('view-sender');
-                document.getElementById('my-peer-id').textContent = id;
-                
-                this.peer.on('connection', (conn) => {
-                    if (this.conn && this.conn.open && this.conn.peer !== conn.peer) {
-                        this.log("Cerrando conexión previa...", 'warn');
-                        this.conn.close();
-                    }
-                    this.conn = conn;
-                    this.log(`Intento de conexión desde: ${conn.peer}`, 'info');
-                    const bindEvents = () => {
-                        this.log("Canal de datos abierto (Emisor).", 'success');
-                        this.setupConnectionEvents();
-                        this.sendData({ type: 'hello' }); 
-                    };
-                    if (conn.open) { bindEvents(); } else { conn.on('open', bindEvents); }
-                    conn.on('error', (err) => this.log(`Error en conexión entrante: ${err}`, 'error'));
-                });
-            },
-
-            initReceiverUI: function() {
-                this.showView('view-receiver');
-                const msg = document.getElementById('disk-support-msg');
-                if (this.supportsFileSystem) {
-                    msg.innerHTML = "<i class='ph-bold ph-hard-drives'></i> ESCRITURA EN DISCO ACTIVA";
-                    msg.className = "text-emerald-400 text-[10px] uppercase font-bold tracking-widest opacity-80 border border-emerald-500/30 px-3 py-1 rounded-full bg-emerald-500/10";
+                if (role === 'sender') {
+                    this.showLoading('Conectando a Red Global', 'Obteniendo canal seguro...');
+                    this.roomId = generateId();
+                    this.initMQTT(this.roomId, () => {
+                        this.hideAllViews();
+                        this.showView('view-sender');
+                        document.getElementById('my-peer-id').textContent = this.roomId;
+                        this.log(`Sala creada: ${this.roomId}`, 'success');
+                        // Emisor se suscribe a mensajes del receptor
+                        this.mqttSubscribe(`lanshare/${this.roomId}/to-sender`);
+                    });
                 } else {
-                    msg.innerHTML = "<i class='ph-bold ph-memory'></i> MODO RAM (SIN DISCO DIRECTO)";
-                    msg.className = "text-yellow-400 text-[10px] uppercase font-bold tracking-widest opacity-80 border border-yellow-500/30 px-3 py-1 rounded-full bg-yellow-500/10";
+                    this.showView('view-receiver');
+                    this.checkDiskSupport();
                 }
             },
 
-            connectToPeer: function() {
-                const remoteId = document.getElementById('remote-id-input').value.trim().toUpperCase(); 
-                if (!remoteId) return alert('Por favor, introduce el ID del Emisor');
-
-                const btn = document.getElementById('btn-connect');
-                btn.disabled = true;
-                btn.innerHTML = '<i class="ph-bold ph-spinner animate-spin"></i> Conectando...';
-
-                this.conn = this.peer.connect(remoteId, { serialization: 'binary' });
-                
-                this.conn.on('open', () => {
-                    this.log("Conectado con Emisor. Iniciando handshake...", 'success');
-                    this.sendData({ type: 'hello' });
-                    this.setupConnectionEvents();
-                    document.getElementById('receiver-connect-form').classList.add('hidden');
-                    document.getElementById('receiver-waiting').classList.remove('hidden');
-                    document.getElementById('receiver-waiting').classList.add('flex');
-                    this.showConnectedStatus();
-                });
-                
-                this.conn.on('error', (err) => {
-                    this.log(`Error al conectar: ${err}`, 'error');
-                    btn.disabled = false;
-                    btn.textContent = 'Reintentar Conexión';
-                });
-
-                setTimeout(() => {
-                    if (!this.conn || !this.conn.open) {
-                        btn.disabled = false;
-                        btn.textContent = 'Conectar Dispositivo';
-                        this.log("Tiempo de espera agotado. Verifica cortafuegos/red.", 'error');
-                    }
-                }, 15000); 
+            checkDiskSupport: function() {
+                 const msg = document.getElementById('disk-support-msg');
+                if (this.supportsFileSystem) {
+                    msg.innerHTML = "Escritura en Disco Disponible";
+                    msg.className = "text-emerald-400 text-[10px] uppercase font-bold tracking-widest opacity-80";
+                } else {
+                    msg.innerHTML = "Solo Memoria RAM (Limitado)";
+                    msg.className = "text-yellow-400 text-[10px] uppercase font-bold tracking-widest opacity-80";
+                }
             },
 
-            setupConnectionEvents: function() {
-                this.conn.off('data'); this.conn.off('close'); this.conn.off('error');
-                this.showConnectedStatus();
-                this.conn.on('data', (data) => this.handleData(data));
-                this.conn.on('close', () => {
-                    this.log("Conexión cerrada por el otro extremo.", 'warn');
-                    alert("La conexión se ha perdido.");
+            /* --- FASE 2: CONEXIÓN MQTT (SIGNALING) --- */
+            connectAsReceiver: function() {
+                const inputId = document.getElementById('remote-id-input').value.trim().toUpperCase();
+                if (!inputId) return alert("Introduce el código");
+                
+                this.roomId = inputId;
+                this.showLoading('Buscando Emisor', 'Conectando al canal de señalización...');
+                
+                this.initMQTT(this.roomId, () => {
+                    this.log("MQTT Conectado. Iniciando WebRTC...", 'info');
+                    // Receptor inicia el proceso WebRTC
+                    this.initWebRTC(); 
+                    // Avisar al emisor que estamos aquí
+                    this.mqttPublish(`lanshare/${this.roomId}/to-sender`, { type: 'hello' });
+                    // Suscribirse a mensajes del emisor
+                    this.mqttSubscribe(`lanshare/${this.roomId}/to-receiver`);
+                });
+            },
+
+            initMQTT: function(topicBase, onConnected) {
+                // ID aleatorio para el cliente MQTT para evitar desconexiones por conflicto
+                const clientId = 'lan_' + Math.random().toString(16).substr(2, 8);
+                
+                this.mqttClient = mqtt.connect(APP_CONFIG.MQTT_BROKER, {
+                    clientId: clientId,
+                    keepalive: 60,
+                    clean: true,
+                    reconnectPeriod: 1000,
+                    connectTimeout: 10000
+                });
+
+                this.mqttClient.on('connect', () => {
+                    this.log("Broker MQTT conectado.", 'system');
+                    if (onConnected) onConnected();
+                });
+
+                this.mqttClient.on('message', (topic, message) => {
+                    try {
+                        const data = JSON.parse(message.toString());
+                        this.handleSignalingData(data);
+                    } catch (e) {
+                        console.error("Error parseando señal", e);
+                    }
+                });
+
+                this.mqttClient.on('error', (err) => {
+                    this.log(`Error MQTT: ${err.message}`, 'error');
+                    this.hideAllViews();
+                    alert("Error conectando al servidor de señalización. Revisa tu internet.");
                     location.reload();
                 });
-                this.conn.on('error', (err) => { this.log(`Error en conexión: ${err}`, 'error'); });
             },
 
-            sendData: function(data) {
-                if (this.conn && this.conn.open) { this.conn.send(data); } else { this.log("Intento de envío sin conexión activa", 'error'); }
+            mqttSubscribe: function(topic) {
+                this.mqttClient.subscribe(topic, (err) => {
+                    if(!err) this.log(`Escuchando en: ${topic}`, 'system');
+                });
             },
 
-            handleData: async function(data) {
+            mqttPublish: function(topic, data) {
+                if (this.mqttClient && this.mqttClient.connected) {
+                    this.mqttClient.publish(topic, JSON.stringify(data));
+                }
+            },
+
+            /* --- FASE 3: WEBRTC NATIVO (SIN PEERJS) --- */
+            initWebRTC: function() {
+                this.log("Inicializando RTCPeerConnection...", 'info');
+                
+                this.peerConnection = new RTCPeerConnection({
+                    iceServers: APP_CONFIG.ICE_SERVERS
+                });
+
+                // ICE Candidates: Enviar al otro lado vía MQTT
+                this.peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        const target = this.role === 'sender' ? 'to-receiver' : 'to-sender';
+                        this.mqttPublish(`lanshare/${this.roomId}/${target}`, {
+                            type: 'candidate',
+                            candidate: event.candidate
+                        });
+                    }
+                };
+
+                this.peerConnection.onconnectionstatechange = () => {
+                    this.log(`Estado WebRTC: ${this.peerConnection.connectionState}`, 'info');
+                    if(this.peerConnection.connectionState === 'connected') {
+                        this.onWebRTCConnected();
+                    }
+                };
+
+                // Si soy EMISOR, creo el DataChannel
+                if (this.role === 'sender') {
+                    this.dataChannel = this.peerConnection.createDataChannel("file-transfer");
+                    this.setupDataChannel();
+                } else {
+                    // Si soy RECEPTOR, espero el DataChannel
+                    this.peerConnection.ondatachannel = (event) => {
+                        this.dataChannel = event.channel;
+                        this.setupDataChannel();
+                    };
+                }
+            },
+
+            setupDataChannel: function() {
+                this.dataChannel.onopen = () => {
+                    this.log("¡CANAL P2P ABIERTO!", 'success');
+                    this.hideAllViews();
+                    this.showConnectedUI();
+                    // Opcional: Desconectar MQTT para ahorrar recursos
+                    // this.mqttClient.end(); 
+                };
+                this.dataChannel.onmessage = (event) => this.handleP2PData(event.data);
+                this.dataChannel.onerror = (error) => this.log(`Error Canal: ${error}`, 'error');
+            },
+
+            onWebRTCConnected: function() {
+                document.getElementById('connection-status').classList.remove('hidden');
+                document.getElementById('connection-status').classList.add('flex');
+            },
+
+            /* --- FASE 4: SEÑALIZACIÓN (OFFER/ANSWER) --- */
+            handleSignalingData: async function(data) {
+                if (data.type === 'hello' && this.role === 'sender') {
+                    // El receptor saludó. El emisor crea la oferta.
+                    this.log("Receptor detectado. Creando oferta...", 'info');
+                    this.initWebRTC(); // Inicializar mi lado
+                    const offer = await this.peerConnection.createOffer();
+                    await this.peerConnection.setLocalDescription(offer);
+                    this.mqttPublish(`lanshare/${this.roomId}/to-receiver`, { type: 'offer', offer: offer });
+
+                } else if (data.type === 'offer' && this.role === 'receiver') {
+                    this.log("Oferta recibida. Creando respuesta...", 'info');
+                    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                    const answer = await this.peerConnection.createAnswer();
+                    await this.peerConnection.setLocalDescription(answer);
+                    this.mqttPublish(`lanshare/${this.roomId}/to-sender`, { type: 'answer', answer: answer });
+
+                } else if (data.type === 'answer' && this.role === 'sender') {
+                    this.log("Respuesta recibida. Conectando...", 'info');
+                    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+
+                } else if (data.type === 'candidate') {
+                    try {
+                        await this.peerConnection.addIceCandidate(data.candidate);
+                    } catch (e) {
+                        console.error("Error añadiendo candidato ICE", e);
+                    }
+                }
+            },
+
+            /* --- FASE 5: TRANSFERENCIA DE FICHEROS P2P --- */
+            // Enviar datos por WebRTC DataChannel (No MQTT)
+            sendP2P: function(msg) {
+                if (this.dataChannel && this.dataChannel.readyState === 'open') {
+                    if (typeof msg === 'object' && !(msg instanceof ArrayBuffer)) {
+                        this.dataChannel.send(JSON.stringify(msg));
+                    } else {
+                        this.dataChannel.send(msg); // ArrayBuffer
+                    }
+                }
+            },
+
+            handleP2PData: async function(raw) {
+                // Detectar si es binario (chunk) o texto (meta/ack)
+                if (raw instanceof ArrayBuffer) {
+                    this.processChunk(raw);
+                    return;
+                }
+                
                 try {
-                    if (data.type === 'hello') {
-                        this.log("Handshake completado.", 'success');
-                        if (this.role === 'sender') {
-                            document.getElementById('sender-id-wrapper').classList.add('hidden');
-                            document.getElementById('drop-zone').classList.remove('hidden');
-                            document.getElementById('drop-zone').classList.add('flex');
-                        }
-                    } else if (data.type === 'meta') {
-                        this.log(`Solicitud de archivo: ${data.name} (${formatBytes(data.size)})`, 'info');
+                    const data = JSON.parse(raw);
+                    if (data.type === 'meta') {
                         this.fileMeta = data;
+                        this.log(`Fichero entrante: ${data.name}`, 'info');
+                        // Mostrar UI de aceptar
                         document.getElementById('accept-filename').textContent = data.name;
                         document.getElementById('accept-filesize').textContent = formatBytes(data.size);
-                        document.getElementById('accept-filetype').textContent = data.mime.split('/')[1] || 'FILE';
-                        if (!this.supportsFileSystem && data.size > APP_CONFIG.RAM_LIMIT_WARNING) {
+                        this.showView('view-accept');
+                        if(!this.supportsFileSystem && data.size > APP_CONFIG.RAM_LIMIT_WARNING) {
                             document.getElementById('ram-warning').classList.remove('hidden');
-                        } else {
-                            document.getElementById('ram-warning').classList.add('hidden');
                         }
-                        this.showView('view-accept'); 
-                    } else if (data.type === 'ready-ack') {
-                        this.log("Receptor aceptó la transferencia. Enviando...", 'success');
+
+                    } else if (data.type === 'ack') {
+                        this.log("Receptor aceptó. Enviando...", 'success');
                         document.getElementById('sender-waiting-approval').classList.add('hidden');
                         this.showView('view-progress');
-                        this.startSendingChunks();
-                    } else if (data.type === 'chunk') {
-                        this.processChunk(data.data);
+                        this.startSending();
+                    
                     } else if (data.type === 'end') {
                         this.finishReception();
                     }
                 } catch (e) {
-                    this.log(`Excepción crítica en handleData: ${e.message}`, 'error');
-                    console.error(e);
-                    alert("Error procesando datos: " + e.message);
+                    // Si falla JSON.parse, asumimos que podría ser un string raro, pero
+                    // como los chunks son ArrayBuffer, no deberían entrar aquí.
                 }
+            },
+
+            /* --- FASE 6: LÓGICA DE FICHEROS (IGUAL QUE ANTES) --- */
+            handleFileSelect: function(input) {
+                const file = input.files[0];
+                if (!file) return;
+                this.file = file;
+                this.sendP2P({ type: 'meta', name: file.name, size: file.size, mime: file.type });
+                
+                document.getElementById('drop-zone').classList.add('hidden');
+                document.getElementById('drop-zone').classList.remove('flex');
+                document.getElementById('sender-waiting-approval').classList.remove('hidden');
+                document.getElementById('sender-waiting-approval').classList.add('flex');
             },
 
             acceptTransfer: async function() {
                 this.receivedSize = 0;
                 this.fileChunks = [];
                 this.writeQueue = Promise.resolve();
+
                 if (this.supportsFileSystem) {
                     try {
                         this.fileHandle = await window.showSaveFilePicker({ suggestedName: this.fileMeta.name });
                         this.writableStream = await this.fileHandle.createWritable();
-                        this.log("Stream directo a disco iniciado.", 'success');
                         this.setStorageBadge(true);
                     } catch (err) {
-                        if (err.name === 'AbortError') { this.log("Guardado cancelado por usuario.", 'warn'); return; }
-                        this.log("Error FS API, fallback a RAM.", 'warn');
-                        this.supportsFileSystem = false; 
+                        this.supportsFileSystem = false;
                         this.setStorageBadge(false);
                     }
                 } else { this.setStorageBadge(false); }
+
                 this.showView('view-progress');
                 this.updateUIProgress(0, this.fileMeta.size);
-                document.getElementById('status-message').textContent = "Recibiendo datos...";
+                document.getElementById('status-message').textContent = "Recibiendo...";
                 this.startTime = Date.now();
-                this.sendData({ type: 'ready-ack' });
+                this.sendP2P({ type: 'ack' });
             },
 
-            processChunk: function(chunkData) {
-                this.receivedSize += chunkData.byteLength;
+            startSending: function() {
+                const file = this.file;
+                let offset = 0;
+                this.startTime = Date.now();
+                const reader = new FileReader();
+
+                const readNextChunk = () => {
+                    const slice = file.slice(offset, offset + APP_CONFIG.CHUNK_SIZE);
+                    reader.readAsArrayBuffer(slice);
+                };
+
+                reader.onload = (e) => {
+                    if (this.dataChannel.readyState !== 'open') return;
+                    
+                    this.dataChannel.send(e.target.result); // Envío binario directo
+                    offset += e.target.result.byteLength;
+                    this.updateUIProgress(offset, file.size);
+
+                    if (this.dataChannel.bufferedAmount > APP_CONFIG.MAX_BUFFER) {
+                        setTimeout(readNextChunk, 50);
+                    } else if (offset < file.size) {
+                        setTimeout(readNextChunk, 0);
+                    } else {
+                        this.sendP2P({ type: 'end' });
+                        this.finishTransfer(true);
+                    }
+                };
+                readNextChunk();
+            },
+
+            processChunk: function(buffer) {
+                this.receivedSize += buffer.byteLength;
                 this.updateUIProgress(this.receivedSize, this.fileMeta.size);
+
                 if (this.supportsFileSystem && this.writableStream) {
                     this.writeQueue = this.writeQueue.then(() => 
-                        this.writableStream.write(chunkData)
-                    ).catch(err => { this.log(`Error IO: ${err.message}`, 'error'); });
-                } else { this.fileChunks.push(chunkData); }
+                        this.writableStream.write(buffer)
+                    ).catch(err => console.error(err));
+                } else {
+                    this.fileChunks.push(buffer);
+                }
             },
 
             finishReception: async function() {
-                document.getElementById('status-message').textContent = "Finalizando archivo...";
                 if (this.supportsFileSystem && this.writableStream) {
                     await this.writeQueue;
                     await this.writableStream.close();
-                    this.log("Archivo guardado correctamente en disco.", 'success');
                 } else {
-                    this.log("Ensamblando archivo en RAM...", 'info');
                     const blob = new Blob(this.fileChunks, { type: this.fileMeta.mime });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
@@ -525,95 +609,71 @@
                     a.download = this.fileMeta.name;
                     document.body.appendChild(a);
                     a.click();
-                    setTimeout(() => {
-                        document.body.removeChild(a);
-                        window.URL.revokeObjectURL(url);
-                        this.fileChunks = [];
-                    }, 2000);
+                    setTimeout(() => URL.revokeObjectURL(url), 5000);
+                    this.fileChunks = [];
                 }
                 this.finishTransfer(false);
             },
 
-            handleFileSelect: function(input) {
-                const file = input.files[0];
-                if (!file) return;
-                this.file = file;
-                if (!this.conn || !this.conn.open) { alert("La conexión no está activa. Por favor, reconecta."); return; }
-                this.sendData({
-                    type: 'meta',
-                    name: this.file.name,
-                    size: this.file.size,
-                    mime: this.file.type
-                });
-                document.getElementById('drop-zone').classList.add('hidden');
-                document.getElementById('drop-zone').classList.remove('flex');
-                document.getElementById('sender-waiting-approval').classList.remove('hidden');
-                document.getElementById('sender-waiting-approval').classList.add('flex');
-                this.log(`Esperando aceptación para: ${this.file.name}`, 'info');
-            },
-
-            startSendingChunks: function() {
-                const file = this.file;
-                let offset = 0;
-                this.startTime = Date.now();
-                this.updateUIProgress(0, file.size);
-                const reader = new FileReader();
-                const readNextChunk = () => {
-                    const slice = file.slice(offset, offset + APP_CONFIG.CHUNK_SIZE);
-                    reader.readAsArrayBuffer(slice);
-                };
-                reader.onload = (e) => {
-                    if (!this.conn || !this.conn.open) { this.log("Conexión perdida durante el envío", 'error'); return; }
-                    this.conn.send({ type: 'chunk', data: e.target.result });
-                    offset += e.target.result.byteLength;
-                    this.updateUIProgress(offset, file.size);
-                    if (this.conn.dataChannel && this.conn.dataChannel.bufferedAmount > APP_CONFIG.MAX_BUFFER) {
-                        setTimeout(readNextChunk, 50); 
-                    } else if (offset < file.size) { setTimeout(readNextChunk, 0); 
-                    } else {
-                        this.conn.send({ type: 'end' });
-                        this.finishTransfer(true);
-                    }
-                };
-                reader.onerror = (err) => this.log(`Error leyendo archivo: ${err}`, 'error');
-                readNextChunk();
+            /* --- UI UTILS --- */
+            showConnectedUI: function() {
+                if(this.role === 'receiver') {
+                    // Receptor espera
+                    this.showLoading('Conectado', 'Esperando fichero del emisor...');
+                    // Hack visual: ocultar loading cuando llegue meta
+                } else {
+                    // Emisor ve Dropzone
+                    document.getElementById('sender-id-wrapper').classList.add('hidden');
+                    document.getElementById('drop-zone').classList.remove('hidden');
+                    document.getElementById('drop-zone').classList.add('flex');
+                }
             },
 
             updateUIProgress: function(current, total) {
-                const percent = Math.min(100, Math.round((current / total) * 100));
-                document.getElementById('file-name-display').textContent = this.fileMeta ? this.fileMeta.name : (this.file ? this.file.name : '');
+                const percent = Math.round((current / total) * 100);
+                document.getElementById('percent-display').textContent = percent + '%';
+                document.getElementById('progress-bar').style.width = percent + '%';
+                
+                // Nombre y tamaño en pantalla de progreso
                 if(this.file || this.fileMeta) {
-                    const sizeEl = document.getElementById('file-size-display');
-                    if(sizeEl.textContent === '0 MB') sizeEl.textContent = formatBytes(total);
+                     const name = this.file ? this.file.name : this.fileMeta.name;
+                     const totalSize = this.file ? this.file.size : this.fileMeta.size;
+                     document.getElementById('file-name-display').textContent = name;
+                     const sizeEl = document.getElementById('file-size-display');
+                     if(sizeEl.textContent === '0 MB') sizeEl.textContent = formatBytes(totalSize);
                 }
-                const bar = document.getElementById('progress-bar');
-                bar.style.width = `${percent}%`;
-                document.getElementById('percent-display').textContent = `${percent}%`;
+
                 const now = Date.now();
                 const duration = (now - this.startTime) / 1000;
-                if (duration > 0.5) {
+                if (duration > 1) {
                     const speed = (current / 1024 / 1024) / duration;
-                    document.getElementById('speed-display').textContent = `${speed.toFixed(1)} MB/s`;
+                    document.getElementById('speed-display').textContent = speed.toFixed(1) + ' MB/s';
                 }
             },
 
             finishTransfer: function(isSender) {
-                const bar = document.getElementById('progress-bar');
-                bar.classList.remove('from-indigo-500', 'to-cyan-400');
-                bar.classList.add('bg-emerald-500');
-                const status = document.getElementById('status-message');
-                status.innerHTML = isSender 
-                    ? "<span class='text-emerald-400 font-bold'><i class='ph-bold ph-check-circle'></i> Enviado correctamente</span>" 
-                    : "<span class='text-emerald-400 font-bold'><i class='ph-bold ph-check-circle'></i> Guardado correctamente</span>";
-                status.classList.remove('animate-pulse', 'text-indigo-300');
+                document.getElementById('status-message').textContent = isSender ? "Envío completado" : "Recibido correctamente";
+                document.getElementById('status-message').className = "text-center text-sm text-emerald-400 font-bold";
+                document.getElementById('progress-bar').className = "bg-emerald-500 h-full w-full";
                 document.getElementById('btn-reset').classList.remove('hidden');
-                this.log("Transferencia completada.", 'success');
+                
+                // Si es receptor, quitar el loading overlay si se quedó
+                if(!isSender) {
+                    // Ya debería estar en view-progress
+                }
+            },
+
+            showLoading: function(title, text) {
+                document.getElementById('view-loading').classList.remove('hidden');
+                document.getElementById('view-loading').classList.add('flex');
+                document.getElementById('loading-title').textContent = title;
+                document.getElementById('loading-status').textContent = text;
             },
 
             hideAllViews: function() {
-                const views = ['view-home', 'view-receiver', 'view-accept', 'view-sender', 'view-progress', 'view-loading'];
-                views.forEach(id => {
-                    const el = document.getElementById(id);
+                const views = ['view-home', 'view-receiver', 'view-sender', 'view-loading', 'view-progress', 'view-accept'];
+                views.forEach(v => {
+                    const el = document.getElementById(v);
                     el.classList.add('hidden');
                     el.classList.remove('flex');
                 });
@@ -621,54 +681,44 @@
 
             showView: function(id) {
                 this.hideAllViews();
-                const el = document.getElementById(id);
-                el.classList.remove('hidden');
-                el.classList.add('flex');
-            },
-
-            showConnectedStatus: function() {
-                document.getElementById('connection-status').classList.remove('hidden');
-                document.getElementById('connection-status').classList.add('flex');
+                document.getElementById(id).classList.remove('hidden');
+                document.getElementById(id).classList.add('flex');
             },
 
             setStorageBadge: function(isDisk) {
                 const badge = document.getElementById('storage-mode-badge');
-                if (isDisk) {
-                    badge.innerHTML = "<i class='ph-bold ph-hard-drives'></i> ESCRITURA EN DISCO";
-                    badge.className = "text-[10px] uppercase tracking-wider px-3 py-1.5 rounded-md font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                if(isDisk) {
+                    badge.innerHTML = "💾 DISCO";
+                    badge.className = "text-[10px] uppercase font-bold tracking-widest px-3 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded";
                 } else {
-                    badge.innerHTML = "<i class='ph-bold ph-memory'></i> MEMORIA RAM";
-                    badge.className = "text-[10px] uppercase tracking-wider px-3 py-1.5 rounded-md font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/30";
+                    badge.innerHTML = "🧠 RAM";
+                    badge.className = "text-[10px] uppercase font-bold tracking-widest px-3 py-1 bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 rounded";
                 }
             },
 
-            log: function(msg, type = 'info') {
-                const logDiv = document.getElementById('logs');
-                const entry = document.createElement('div');
+            log: function(msg, type='info') {
+                const logs = document.getElementById('logs');
+                const div = document.createElement('div');
+                div.className = "mb-1 border-b border-slate-800/50 pb-0.5";
                 const time = new Date().toLocaleTimeString();
-                let colorClass = "text-slate-400";
-                if (type === 'error') colorClass = "text-red-400 font-bold";
-                if (type === 'warn') colorClass = "text-yellow-400";
-                if (type === 'success') colorClass = "text-emerald-400";
-                if (type === 'system') colorClass = "text-indigo-400";
-                entry.className = `text-[10px] font-mono ${colorClass} mb-1 border-b border-slate-800/50 pb-0.5`;
-                entry.innerHTML = `<span class="opacity-50">[${time}]</span> ${msg}`;
-                logDiv.appendChild(entry);
-                logDiv.scrollTop = logDiv.scrollHeight;
+                let color = "text-slate-400";
+                if(type==='error') color="text-red-400 font-bold";
+                if(type==='success') color="text-emerald-400";
+                if(type==='system') color="text-indigo-400";
+                
+                div.innerHTML = `<span class="opacity-50 text-[10px]">[${time}]</span> <span class="${color}">${msg}</span>`;
+                logs.appendChild(div);
+                logs.scrollTop = logs.scrollHeight;
             },
 
             copyId: function() {
-                if(this.myId) {
-                    navigator.clipboard.writeText(this.myId).then(() => {
-                        this.log("ID copiado al portapapeles", 'system');
-                        alert("ID Copiado");
-                    });
-                }
+                navigator.clipboard.writeText(this.roomId).then(() => alert("Código copiado"));
             }
         };
 
         window.addEventListener('dragover', e => e.preventDefault());
         window.addEventListener('drop', e => e.preventDefault());
+        
         app.init();
     </script>
 </body>
