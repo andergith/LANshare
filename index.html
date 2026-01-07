@@ -27,7 +27,6 @@
             0%, 100% { opacity: 1; }
             50% { opacity: .5; }
         }
-        /* Animación Fade In crucial para cambios de vista */
         .fade-in {
             animation: fadeIn 0.4s ease-out forwards;
         }
@@ -60,6 +59,16 @@
         <!-- VISTAS DE LA APP -->
         <main class="flex-1 relative p-6 overflow-hidden">
             
+            <!-- 0. Pantalla de Carga (Nueva) -->
+            <div id="view-loading" class="hidden flex-col items-center justify-center h-full text-center gap-6 fade-in z-50 absolute inset-0 bg-slate-800/95">
+                <div class="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                <div>
+                    <h3 class="text-lg font-bold text-white mb-1">Iniciando Red...</h3>
+                    <p class="text-slate-400 text-xs">Conectando con el servidor de señalización.</p>
+                </div>
+                <button onclick="location.reload()" class="mt-8 text-xs text-slate-500 hover:text-white underline">Cancelar (Recargar)</button>
+            </div>
+
             <!-- 1. Inicio -->
             <div id="view-home" class="flex flex-col gap-4 h-full justify-center fade-in">
                 <div class="text-center mb-6">
@@ -237,23 +246,21 @@
         <!-- Logs / Debug Console -->
         <div class="bg-black/80 p-3 h-28 overflow-y-auto no-scrollbar border-t border-slate-700/50 text-[10px] font-mono text-slate-400 select-text">
             <div id="logs" class="flex flex-col gap-1.5">
-                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1">[Sistema] LANshare v3.0 listo.</div>
+                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1">[Sistema] LANshare v3.1 listo.</div>
             </div>
         </div>
     </div>
 
     <script>
-        // Configuración y Constantes
         const APP_CONFIG = {
-            CHUNK_SIZE: 64 * 1024, // 64KB (Mejor rendimiento que 16KB)
-            MAX_BUFFER: 16 * 1024 * 1024, // 16MB
-            RAM_LIMIT_WARNING: 500 * 1024 * 1024 // 500MB
+            CHUNK_SIZE: 64 * 1024,
+            MAX_BUFFER: 16 * 1024 * 1024,
+            RAM_LIMIT_WARNING: 500 * 1024 * 1024
         };
 
         const ADJECTIVES = ['ROJO', 'AZUL', 'VERDE', 'NEGRO', 'BLANCO', 'RAPIDO', 'LISTO', 'FELIZ', 'BRAVO', 'NOBLE'];
         const NOUNS = ['LOBO', 'GATO', 'OSO', 'HALCON', 'ZORRO', 'LEON', 'TIGRE', 'BUHO', 'DRAGON', 'PANDA'];
         
-        // Utilidades
         function generateFriendlyId() {
             const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
             const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
@@ -270,31 +277,25 @@
             return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
         }
 
-        // Núcleo de la Aplicación
         const app = {
             peer: null,
             conn: null,
             myId: null,
             role: null,
             file: null,
-            
-            // Variables de Estado de Transferencia
             fileChunks: [],
             receivedSize: 0,
             fileMeta: null,
             startTime: 0,
-            
-            // Streaming FileSystem API
             fileHandle: null,
             writableStream: null,
             writeQueue: Promise.resolve(),
             supportsFileSystem: false,
+            initTimeout: null,
 
             init: function() {
                 this.log("Iniciando aplicación...", 'system');
                 this.supportsFileSystem = 'showSaveFilePicker' in window;
-                
-                // Prevenir cierre accidental
                 window.onbeforeunload = () => {
                     if (this.conn && this.conn.open) return "Tienes una conexión activa. ¿Seguro que quieres salir?";
                 };
@@ -304,13 +305,36 @@
                 this.role = role;
                 this.hideAllViews();
                 
+                // MOSTRAR CARGA INMEDIATA
+                this.showView('view-loading');
+                
                 this.myId = generateFriendlyId();
-                // PeerJS Config: debug 2 muestra advertencias, 3 todo.
-                this.peer = new Peer(this.myId, { debug: 2 });
+                
+                // CONFIGURACIÓN DE PEERJS MEJORADA
+                // Usamos servidores STUN de Google para mejorar conectividad
+                this.peer = new Peer(this.myId, { 
+                    debug: 2,
+                    config: {
+                        iceServers: [
+                            { urls: 'stun:stun1.l.google.com:19302' },
+                            { urls: 'stun:stun2.l.google.com:19302' }
+                        ]
+                    }
+                });
+
+                // TIMEOUT DE SEGURIDAD
+                // Si en 15 segundos no conecta, avisamos.
+                this.initTimeout = setTimeout(() => {
+                    this.log("La conexión al servidor está tardando mucho...", 'warn');
+                    alert("Error: No se ha podido conectar al servidor de señalización. Verifica tu conexión a internet.");
+                    location.reload();
+                }, 15000);
 
                 this.peer.on('open', (id) => {
+                    clearTimeout(this.initTimeout); // Cancelar timeout
                     this.log(`Peer local iniciado. ID: ${id}`, 'success');
                     
+                    this.hideAllViews(); // Ocultar carga
                     if (role === 'sender') {
                         this.initSenderUI(id);
                     } else {
@@ -319,57 +343,40 @@
                 });
 
                 this.peer.on('error', (err) => {
+                    clearTimeout(this.initTimeout);
                     this.log(`Error PeerJS: ${err.type}`, 'error');
                     let msg = "Error de conexión.";
                     if (err.type === 'peer-unavailable') msg = "ID no encontrado. Verifica el código.";
                     if (err.type === 'disconnected') msg = "Desconectado del servidor.";
+                    if (err.type === 'network') msg = "Error de red. Verifica tu conexión.";
                     alert(msg);
-                    if(role === 'receiver') {
-                        document.getElementById('btn-connect').disabled = false;
-                        document.getElementById('btn-connect').textContent = 'Conectar Dispositivo';
-                    }
+                    location.reload();
                 });
             },
 
-            // --- Lógica del EMISOR (Sender) ---
             initSenderUI: function(id) {
                 this.showView('view-sender');
                 document.getElementById('my-peer-id').textContent = id;
                 
-                // Evento CRÍTICO: Cuando alguien se conecta a mí
                 this.peer.on('connection', (conn) => {
-                    // Si ya hay una conexión abierta y distinta, cerramos.
-                    // Si es un reintento del mismo peer, PeerJS suele manejarlo.
                     if (this.conn && this.conn.open && this.conn.peer !== conn.peer) {
                         this.log("Cerrando conexión previa...", 'warn');
                         this.conn.close();
                     }
-                    
                     this.conn = conn;
                     this.log(`Intento de conexión desde: ${conn.peer}`, 'info');
-
-                    // Definimos los eventos
                     const bindEvents = () => {
                         this.log("Canal de datos abierto (Emisor).", 'success');
                         this.setupConnectionEvents();
-                        // Ping preventivo para despertar conexiones NAT
                         this.sendData({ type: 'hello' }); 
                     };
-
-                    if (conn.open) {
-                        bindEvents();
-                    } else {
-                        conn.on('open', bindEvents);
-                    }
-                    
+                    if (conn.open) { bindEvents(); } else { conn.on('open', bindEvents); }
                     conn.on('error', (err) => this.log(`Error en conexión entrante: ${err}`, 'error'));
                 });
             },
 
-            // --- Lógica del RECEPTOR (Receiver) ---
             initReceiverUI: function() {
                 this.showView('view-receiver');
-                
                 const msg = document.getElementById('disk-support-msg');
                 if (this.supportsFileSystem) {
                     msg.innerHTML = "<i class='ph-bold ph-hard-drives'></i> ESCRITURA EN DISCO ACTIVA";
@@ -388,19 +395,12 @@
                 btn.disabled = true;
                 btn.innerHTML = '<i class="ph-bold ph-spinner animate-spin"></i> Conectando...';
 
-                // CORRECCIÓN: Quitamos reliable: true y usamos binary serialization
-                this.conn = this.peer.connect(remoteId, {
-                    serialization: 'binary'
-                });
+                this.conn = this.peer.connect(remoteId, { serialization: 'binary' });
                 
                 this.conn.on('open', () => {
                     this.log("Conectado con Emisor. Iniciando handshake...", 'success');
-                    // ENVIAR SALUDO (Handshake)
                     this.sendData({ type: 'hello' });
-
                     this.setupConnectionEvents();
-                    
-                    // UI Waiting
                     document.getElementById('receiver-connect-form').classList.add('hidden');
                     document.getElementById('receiver-waiting').classList.remove('hidden');
                     document.getElementById('receiver-waiting').classList.add('flex');
@@ -408,12 +408,11 @@
                 });
                 
                 this.conn.on('error', (err) => {
-                     this.log(`Error al conectar: ${err}`, 'error');
-                     btn.disabled = false;
-                     btn.textContent = 'Reintentar Conexión';
+                    this.log(`Error al conectar: ${err}`, 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Reintentar Conexión';
                 });
 
-                // Watchdog para timeout (aumentado a 15s)
                 setTimeout(() => {
                     if (!this.conn || !this.conn.open) {
                         btn.disabled = false;
@@ -423,83 +422,51 @@
                 }, 15000); 
             },
 
-            // --- Gestión Común de Eventos ---
             setupConnectionEvents: function() {
-                // Evitamos duplicar eventos si se llama varias veces
-                this.conn.off('data'); 
-                this.conn.off('close');
-                this.conn.off('error');
-
+                this.conn.off('data'); this.conn.off('close'); this.conn.off('error');
                 this.showConnectedStatus();
-                
                 this.conn.on('data', (data) => this.handleData(data));
-                
                 this.conn.on('close', () => {
                     this.log("Conexión cerrada por el otro extremo.", 'warn');
                     alert("La conexión se ha perdido.");
                     location.reload();
                 });
-                
-                this.conn.on('error', (err) => {
-                    this.log(`Error en conexión: ${err}`, 'error');
-                });
+                this.conn.on('error', (err) => { this.log(`Error en conexión: ${err}`, 'error'); });
             },
 
             sendData: function(data) {
-                if (this.conn && this.conn.open) {
-                    this.conn.send(data);
-                } else {
-                    this.log("Intento de envío sin conexión activa", 'error');
-                }
+                if (this.conn && this.conn.open) { this.conn.send(data); } else { this.log("Intento de envío sin conexión activa", 'error'); }
             },
 
-            // --- MÁQUINA DE ESTADOS (Recepción de Datos) ---
             handleData: async function(data) {
                 try {
                     if (data.type === 'hello') {
-                        // [AMBOS] Reciben saludo. 
-                        // El emisor desbloquea UI, el receptor confirma conexión.
                         this.log("Handshake completado.", 'success');
-                        
                         if (this.role === 'sender') {
                             document.getElementById('sender-id-wrapper').classList.add('hidden');
                             document.getElementById('drop-zone').classList.remove('hidden');
                             document.getElementById('drop-zone').classList.add('flex');
                         }
-                        
                     } else if (data.type === 'meta') {
-                        // [RECEPTOR] Recibe metadatos del archivo
                         this.log(`Solicitud de archivo: ${data.name} (${formatBytes(data.size)})`, 'info');
-                        
                         this.fileMeta = data;
-                        
-                        // Actualizar UI de Aceptación
                         document.getElementById('accept-filename').textContent = data.name;
                         document.getElementById('accept-filesize').textContent = formatBytes(data.size);
                         document.getElementById('accept-filetype').textContent = data.mime.split('/')[1] || 'FILE';
-                        
-                        // Advertencia RAM
                         if (!this.supportsFileSystem && data.size > APP_CONFIG.RAM_LIMIT_WARNING) {
                             document.getElementById('ram-warning').classList.remove('hidden');
                         } else {
                             document.getElementById('ram-warning').classList.add('hidden');
                         }
-
                         this.showView('view-accept'); 
-
                     } else if (data.type === 'ready-ack') {
-                        // [EMISOR] Receptor aceptó, iniciar envío
                         this.log("Receptor aceptó la transferencia. Enviando...", 'success');
                         document.getElementById('sender-waiting-approval').classList.add('hidden');
                         this.showView('view-progress');
                         this.startSendingChunks();
-
                     } else if (data.type === 'chunk') {
-                        // [RECEPTOR] Recibir trozo
                         this.processChunk(data.data);
-
                     } else if (data.type === 'end') {
-                        // [RECEPTOR] Fin
                         this.finishReception();
                     }
                 } catch (e) {
@@ -509,64 +476,42 @@
                 }
             },
 
-            // --- RECEPTOR: Aceptar y Guardar ---
             acceptTransfer: async function() {
                 this.receivedSize = 0;
                 this.fileChunks = [];
                 this.writeQueue = Promise.resolve();
-
-                // Lógica File System Access API
                 if (this.supportsFileSystem) {
                     try {
-                        this.fileHandle = await window.showSaveFilePicker({
-                            suggestedName: this.fileMeta.name
-                        });
+                        this.fileHandle = await window.showSaveFilePicker({ suggestedName: this.fileMeta.name });
                         this.writableStream = await this.fileHandle.createWritable();
                         this.log("Stream directo a disco iniciado.", 'success');
                         this.setStorageBadge(true);
                     } catch (err) {
-                        if (err.name === 'AbortError') {
-                            this.log("Guardado cancelado por usuario.", 'warn');
-                            return; // Salir sin enviar ACK si cancela
-                        }
+                        if (err.name === 'AbortError') { this.log("Guardado cancelado por usuario.", 'warn'); return; }
                         this.log("Error FS API, fallback a RAM.", 'warn');
-                        this.supportsFileSystem = false; // Fallback temporal
+                        this.supportsFileSystem = false; 
                         this.setStorageBadge(false);
                     }
-                } else {
-                    this.setStorageBadge(false);
-                }
-
-                // Cambio de vista
+                } else { this.setStorageBadge(false); }
                 this.showView('view-progress');
                 this.updateUIProgress(0, this.fileMeta.size);
                 document.getElementById('status-message').textContent = "Recibiendo datos...";
                 this.startTime = Date.now();
-
-                // Notificar al emisor
                 this.sendData({ type: 'ready-ack' });
             },
 
             processChunk: function(chunkData) {
                 this.receivedSize += chunkData.byteLength;
                 this.updateUIProgress(this.receivedSize, this.fileMeta.size);
-
                 if (this.supportsFileSystem && this.writableStream) {
-                    // Escritura en cola para no saturar I/O
                     this.writeQueue = this.writeQueue.then(() => 
                         this.writableStream.write(chunkData)
-                    ).catch(err => {
-                        this.log(`Error IO: ${err.message}`, 'error');
-                        // Estrategia de fallo: Podríamos abortar, pero intentamos seguir
-                    });
-                } else {
-                    this.fileChunks.push(chunkData);
-                }
+                    ).catch(err => { this.log(`Error IO: ${err.message}`, 'error'); });
+                } else { this.fileChunks.push(chunkData); }
             },
 
             finishReception: async function() {
                 document.getElementById('status-message').textContent = "Finalizando archivo...";
-                
                 if (this.supportsFileSystem && this.writableStream) {
                     await this.writeQueue;
                     await this.writableStream.close();
@@ -580,8 +525,6 @@
                     a.download = this.fileMeta.name;
                     document.body.appendChild(a);
                     a.click();
-                    
-                    // Limpieza agresiva de memoria
                     setTimeout(() => {
                         document.body.removeChild(a);
                         window.URL.revokeObjectURL(url);
@@ -591,30 +534,21 @@
                 this.finishTransfer(false);
             },
 
-            // --- EMISOR: Selección y Envío ---
             handleFileSelect: function(input) {
                 const file = input.files[0];
                 if (!file) return;
                 this.file = file;
-
-                // Validación de conexión antes de UI
-                if (!this.conn || !this.conn.open) {
-                    alert("La conexión no está activa. Por favor, reconecta.");
-                    return;
-                }
-
+                if (!this.conn || !this.conn.open) { alert("La conexión no está activa. Por favor, reconecta."); return; }
                 this.sendData({
                     type: 'meta',
                     name: this.file.name,
                     size: this.file.size,
                     mime: this.file.type
                 });
-
                 document.getElementById('drop-zone').classList.add('hidden');
                 document.getElementById('drop-zone').classList.remove('flex');
                 document.getElementById('sender-waiting-approval').classList.remove('hidden');
                 document.getElementById('sender-waiting-approval').classList.add('flex');
-                
                 this.log(`Esperando aceptación para: ${this.file.name}`, 'info');
             },
 
@@ -623,63 +557,41 @@
                 let offset = 0;
                 this.startTime = Date.now();
                 this.updateUIProgress(0, file.size);
-                
                 const reader = new FileReader();
-
                 const readNextChunk = () => {
                     const slice = file.slice(offset, offset + APP_CONFIG.CHUNK_SIZE);
                     reader.readAsArrayBuffer(slice);
                 };
-
                 reader.onload = (e) => {
-                    if (!this.conn || !this.conn.open) {
-                        this.log("Conexión perdida durante el envío", 'error');
-                        return;
-                    }
-                    
+                    if (!this.conn || !this.conn.open) { this.log("Conexión perdida durante el envío", 'error'); return; }
                     this.conn.send({ type: 'chunk', data: e.target.result });
                     offset += e.target.result.byteLength;
                     this.updateUIProgress(offset, file.size);
-
-                    // CONTROL DE FLUJO (Backpressure)
-                    // Si el buffer de WebRTC está lleno, esperamos para no saturar memoria/red
                     if (this.conn.dataChannel && this.conn.dataChannel.bufferedAmount > APP_CONFIG.MAX_BUFFER) {
-                         setTimeout(readNextChunk, 50); // Pausa breve
-                    } else if (offset < file.size) {
-                        // setTimeout(0) libera el hilo UI para que la barra de progreso se mueva
-                        setTimeout(readNextChunk, 0); 
+                        setTimeout(readNextChunk, 50); 
+                    } else if (offset < file.size) { setTimeout(readNextChunk, 0); 
                     } else {
                         this.conn.send({ type: 'end' });
                         this.finishTransfer(true);
                     }
                 };
-                
                 reader.onerror = (err) => this.log(`Error leyendo archivo: ${err}`, 'error');
-                
                 readNextChunk();
             },
 
-            // --- UI Helpers ---
             updateUIProgress: function(current, total) {
                 const percent = Math.min(100, Math.round((current / total) * 100));
-                
-                // Actualizar textos
                 document.getElementById('file-name-display').textContent = this.fileMeta ? this.fileMeta.name : (this.file ? this.file.name : '');
                 if(this.file || this.fileMeta) {
-                    // Solo actualizamos el tamaño total una vez o si cambia
                     const sizeEl = document.getElementById('file-size-display');
                     if(sizeEl.textContent === '0 MB') sizeEl.textContent = formatBytes(total);
                 }
-
-                // Barra
                 const bar = document.getElementById('progress-bar');
                 bar.style.width = `${percent}%`;
                 document.getElementById('percent-display').textContent = `${percent}%`;
-                
-                // Velocidad
                 const now = Date.now();
                 const duration = (now - this.startTime) / 1000;
-                if (duration > 0.5) { // Solo calcular después de medio segundo para estabilidad
+                if (duration > 0.5) {
                     const speed = (current / 1024 / 1024) / duration;
                     document.getElementById('speed-display').textContent = `${speed.toFixed(1)} MB/s`;
                 }
@@ -689,19 +601,17 @@
                 const bar = document.getElementById('progress-bar');
                 bar.classList.remove('from-indigo-500', 'to-cyan-400');
                 bar.classList.add('bg-emerald-500');
-                
                 const status = document.getElementById('status-message');
                 status.innerHTML = isSender 
                     ? "<span class='text-emerald-400 font-bold'><i class='ph-bold ph-check-circle'></i> Enviado correctamente</span>" 
                     : "<span class='text-emerald-400 font-bold'><i class='ph-bold ph-check-circle'></i> Guardado correctamente</span>";
                 status.classList.remove('animate-pulse', 'text-indigo-300');
-                
                 document.getElementById('btn-reset').classList.remove('hidden');
                 this.log("Transferencia completada.", 'success');
             },
 
             hideAllViews: function() {
-                const views = ['view-home', 'view-receiver', 'view-accept', 'view-sender', 'view-progress'];
+                const views = ['view-home', 'view-receiver', 'view-accept', 'view-sender', 'view-progress', 'view-loading'];
                 views.forEach(id => {
                     const el = document.getElementById(id);
                     el.classList.add('hidden');
@@ -736,16 +646,13 @@
                 const logDiv = document.getElementById('logs');
                 const entry = document.createElement('div');
                 const time = new Date().toLocaleTimeString();
-                
                 let colorClass = "text-slate-400";
                 if (type === 'error') colorClass = "text-red-400 font-bold";
                 if (type === 'warn') colorClass = "text-yellow-400";
                 if (type === 'success') colorClass = "text-emerald-400";
                 if (type === 'system') colorClass = "text-indigo-400";
-
                 entry.className = `text-[10px] font-mono ${colorClass} mb-1 border-b border-slate-800/50 pb-0.5`;
                 entry.innerHTML = `<span class="opacity-50">[${time}]</span> ${msg}`;
-                
                 logDiv.appendChild(entry);
                 logDiv.scrollTop = logDiv.scrollHeight;
             },
@@ -760,11 +667,8 @@
             }
         };
 
-        // Event Listeners Globales
         window.addEventListener('dragover', e => e.preventDefault());
         window.addEventListener('drop', e => e.preventDefault());
-        
-        // Iniciar App
         app.init();
     </script>
 </body>
