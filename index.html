@@ -48,7 +48,7 @@
                 <div class="bg-indigo-500/20 p-2 rounded-lg">
                     <i class="ph-fill ph-paper-plane-tilt text-indigo-400 text-xl"></i>
                 </div>
-                <h1 class="text-xl font-bold tracking-tight text-white">LANshare <span class="text-[10px] bg-indigo-600 px-1 rounded text-white opacity-70">MQTT</span></h1>
+                <h1 class="text-xl font-bold tracking-tight text-white">LANshare <span class="text-[10px] bg-indigo-600 px-1 rounded text-white opacity-70">MQTT v4.2</span></h1>
             </div>
             <div id="connection-status" class="hidden text-[10px] font-mono bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-full flex items-center gap-2 border border-emerald-500/20">
                 <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
@@ -222,7 +222,7 @@
         <!-- Debug Console -->
         <div class="bg-black/80 p-3 h-28 overflow-y-auto no-scrollbar border-t border-slate-700/50 text-[10px] font-mono text-slate-400 select-text">
             <div id="logs" class="flex flex-col gap-1.5">
-                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1">[Sistema] Motor MQTT v4.0 inicializado.</div>
+                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1">[Sistema] Motor MQTT v4.2 inicializado.</div>
             </div>
         </div>
     </div>
@@ -230,7 +230,7 @@
     <script>
         /* --- CONFIGURACIÓN TÉCNICA --- */
         const APP_CONFIG = {
-            MQTT_BROKER: 'wss://broker.emqx.io:8084/mqtt', // Broker profesional público SSL
+            MQTT_BROKER: 'wss://broker.emqx.io:8084/mqtt', 
             CHUNK_SIZE: 64 * 1024,
             MAX_BUFFER: 16 * 1024 * 1024,
             RAM_LIMIT_WARNING: 500 * 1024 * 1024,
@@ -265,11 +265,13 @@
             // MQTT & Signaling
             mqttClient: null,
             roomId: null,
-            role: null, // 'sender' | 'receiver'
+            role: null, 
             
             // WebRTC
             peerConnection: null,
             dataChannel: null,
+            iceCandidateQueue: [], // COLA PARA CANDIDATOS ICE
+            retryCount: 0,
             
             // File Handling
             file: null,
@@ -287,7 +289,6 @@
                 this.supportsFileSystem = 'showSaveFilePicker' in window;
             },
 
-            /* --- FASE 1: INICIALIZACIÓN Y ROL --- */
             setRole: function(role) {
                 this.role = role;
                 this.hideAllViews();
@@ -300,7 +301,6 @@
                         this.showView('view-sender');
                         document.getElementById('my-peer-id').textContent = this.roomId;
                         this.log(`Sala creada: ${this.roomId}`, 'success');
-                        // Emisor se suscribe a mensajes del receptor
                         this.mqttSubscribe(`lanshare/${this.roomId}/to-sender`);
                     });
                 } else {
@@ -320,7 +320,6 @@
                 }
             },
 
-            /* --- FASE 2: CONEXIÓN MQTT (SIGNALING) --- */
             connectAsReceiver: function() {
                 const inputId = document.getElementById('remote-id-input').value.trim().toUpperCase();
                 if (!inputId) return alert("Introduce el código");
@@ -330,17 +329,13 @@
                 
                 this.initMQTT(this.roomId, () => {
                     this.log("MQTT Conectado. Iniciando WebRTC...", 'info');
-                    // Receptor inicia el proceso WebRTC
                     this.initWebRTC(); 
-                    // Avisar al emisor que estamos aquí
                     this.mqttPublish(`lanshare/${this.roomId}/to-sender`, { type: 'hello' });
-                    // Suscribirse a mensajes del emisor
                     this.mqttSubscribe(`lanshare/${this.roomId}/to-receiver`);
                 });
             },
 
             initMQTT: function(topicBase, onConnected) {
-                // ID aleatorio para el cliente MQTT para evitar desconexiones por conflicto
                 const clientId = 'lan_' + Math.random().toString(16).substr(2, 8);
                 
                 this.mqttClient = mqtt.connect(APP_CONFIG.MQTT_BROKER, {
@@ -385,22 +380,26 @@
                 }
             },
 
-            /* --- FASE 3: WEBRTC NATIVO (SIN PEERJS) --- */
             initWebRTC: function() {
                 this.log("Inicializando RTCPeerConnection...", 'info');
+                this.iceCandidateQueue = []; // Resetear cola
                 
                 this.peerConnection = new RTCPeerConnection({
-                    iceServers: APP_CONFIG.ICE_SERVERS
+                    iceServers: APP_CONFIG.ICE_SERVERS,
+                    iceTransportPolicy: 'all',
+                    iceCandidatePoolSize: 10
                 });
 
-                // ICE Candidates: Enviar al otro lado vía MQTT
                 this.peerConnection.onicecandidate = (event) => {
                     if (event.candidate) {
+                        // this.log(`Candidato ICE Generado: ${event.candidate.type}`, 'system');
                         const target = this.role === 'sender' ? 'to-receiver' : 'to-sender';
                         this.mqttPublish(`lanshare/${this.roomId}/${target}`, {
                             type: 'candidate',
                             candidate: event.candidate
                         });
+                    } else {
+                        // this.log("Fin de recolección de candidatos locales.", 'system');
                     }
                 };
 
@@ -408,15 +407,19 @@
                     this.log(`Estado WebRTC: ${this.peerConnection.connectionState}`, 'info');
                     if(this.peerConnection.connectionState === 'connected') {
                         this.onWebRTCConnected();
+                    } else if (this.peerConnection.connectionState === 'failed') {
+                        this.log("Fallo crítico en WebRTC. Intentando recuperar...", 'error');
+                        if (this.retryCount === 0) {
+                             this.retryCount++;
+                             this.peerConnection.restartIce();
+                        }
                     }
                 };
 
-                // Si soy EMISOR, creo el DataChannel
                 if (this.role === 'sender') {
                     this.dataChannel = this.peerConnection.createDataChannel("file-transfer");
                     this.setupDataChannel();
                 } else {
-                    // Si soy RECEPTOR, espero el DataChannel
                     this.peerConnection.ondatachannel = (event) => {
                         this.dataChannel = event.channel;
                         this.setupDataChannel();
@@ -429,8 +432,6 @@
                     this.log("¡CANAL P2P ABIERTO!", 'success');
                     this.hideAllViews();
                     this.showConnectedUI();
-                    // Opcional: Desconectar MQTT para ahorrar recursos
-                    // this.mqttClient.end(); 
                 };
                 this.dataChannel.onmessage = (event) => this.handleP2PData(event.data);
                 this.dataChannel.onerror = (error) => this.log(`Error Canal: ${error}`, 'error');
@@ -441,19 +442,28 @@
                 document.getElementById('connection-status').classList.add('flex');
             },
 
-            /* --- FASE 4: SEÑALIZACIÓN (OFFER/ANSWER) --- */
+            // --- LÓGICA CRÍTICA DE SEÑALIZACIÓN CON COLA ---
             handleSignalingData: async function(data) {
                 if (data.type === 'hello' && this.role === 'sender') {
-                    // El receptor saludó. El emisor crea la oferta.
-                    this.log("Receptor detectado. Creando oferta...", 'info');
-                    this.initWebRTC(); // Inicializar mi lado
+                    this.log("Receptor detectado. Generando candidatos...", 'info');
+                    this.initWebRTC(); // 1. Inicializar
+                    
+                    // 2. Crear oferta pero esperar un poco para que se adjunten candidatos
                     const offer = await this.peerConnection.createOffer();
                     await this.peerConnection.setLocalDescription(offer);
-                    this.mqttPublish(`lanshare/${this.roomId}/to-receiver`, { type: 'offer', offer: offer });
+                    
+                    // ESTRATEGIA: Esperar 500ms a que se recolecten candidatos locales antes de enviar oferta
+                    setTimeout(() => {
+                        this.log("Enviando Oferta SDP...", 'info');
+                         this.mqttPublish(`lanshare/${this.roomId}/to-receiver`, { type: 'offer', offer: this.peerConnection.localDescription });
+                    }, 500);
 
                 } else if (data.type === 'offer' && this.role === 'receiver') {
-                    this.log("Oferta recibida. Creando respuesta...", 'info');
+                    this.log("Oferta recibida. Procesando...", 'info');
                     await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                    // Procesar cola si había candidatos esperando ANTES de crear respuesta
+                    await this.processIceQueue();
+                    
                     const answer = await this.peerConnection.createAnswer();
                     await this.peerConnection.setLocalDescription(answer);
                     this.mqttPublish(`lanshare/${this.roomId}/to-sender`, { type: 'answer', answer: answer });
@@ -461,30 +471,51 @@
                 } else if (data.type === 'answer' && this.role === 'sender') {
                     this.log("Respuesta recibida. Conectando...", 'info');
                     await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    // Procesar cola si había candidatos esperando
+                    await this.processIceQueue();
 
                 } else if (data.type === 'candidate') {
-                    try {
-                        await this.peerConnection.addIceCandidate(data.candidate);
-                    } catch (e) {
-                        console.error("Error añadiendo candidato ICE", e);
+                    // Log para confirmar recepción
+                    // this.log("Candidato ICE Recibido vía MQTT", 'system');
+                    
+                    if (this.peerConnection && this.peerConnection.remoteDescription && this.peerConnection.remoteDescription.type) {
+                        try {
+                            await this.peerConnection.addIceCandidate(data.candidate);
+                        } catch (e) {
+                            console.error("Error añadiendo candidato directo", e);
+                        }
+                    } else {
+                        // this.log("Encolando candidato (SDP pendiente)", 'warn');
+                        this.iceCandidateQueue.push(data.candidate);
                     }
                 }
             },
 
-            /* --- FASE 5: TRANSFERENCIA DE FICHEROS P2P --- */
-            // Enviar datos por WebRTC DataChannel (No MQTT)
+            processIceQueue: async function() {
+                if(this.iceCandidateQueue.length > 0) {
+                    this.log(`Procesando cola ICE (${this.iceCandidateQueue.length})...`, 'info');
+                    while(this.iceCandidateQueue.length > 0) {
+                        const candidate = this.iceCandidateQueue.shift();
+                        try {
+                            await this.peerConnection.addIceCandidate(candidate);
+                        } catch (e) {
+                             console.error("Error procesando cola ICE", e);
+                        }
+                    }
+                }
+            },
+
             sendP2P: function(msg) {
                 if (this.dataChannel && this.dataChannel.readyState === 'open') {
                     if (typeof msg === 'object' && !(msg instanceof ArrayBuffer)) {
                         this.dataChannel.send(JSON.stringify(msg));
                     } else {
-                        this.dataChannel.send(msg); // ArrayBuffer
+                        this.dataChannel.send(msg); 
                     }
                 }
             },
 
             handleP2PData: async function(raw) {
-                // Detectar si es binario (chunk) o texto (meta/ack)
                 if (raw instanceof ArrayBuffer) {
                     this.processChunk(raw);
                     return;
@@ -495,7 +526,6 @@
                     if (data.type === 'meta') {
                         this.fileMeta = data;
                         this.log(`Fichero entrante: ${data.name}`, 'info');
-                        // Mostrar UI de aceptar
                         document.getElementById('accept-filename').textContent = data.name;
                         document.getElementById('accept-filesize').textContent = formatBytes(data.size);
                         this.showView('view-accept');
@@ -512,13 +542,9 @@
                     } else if (data.type === 'end') {
                         this.finishReception();
                     }
-                } catch (e) {
-                    // Si falla JSON.parse, asumimos que podría ser un string raro, pero
-                    // como los chunks son ArrayBuffer, no deberían entrar aquí.
-                }
+                } catch (e) { }
             },
 
-            /* --- FASE 6: LÓGICA DE FICHEROS (IGUAL QUE ANTES) --- */
             handleFileSelect: function(input) {
                 const file = input.files[0];
                 if (!file) return;
@@ -568,7 +594,7 @@
                 reader.onload = (e) => {
                     if (this.dataChannel.readyState !== 'open') return;
                     
-                    this.dataChannel.send(e.target.result); // Envío binario directo
+                    this.dataChannel.send(e.target.result); 
                     offset += e.target.result.byteLength;
                     this.updateUIProgress(offset, file.size);
 
@@ -615,14 +641,10 @@
                 this.finishTransfer(false);
             },
 
-            /* --- UI UTILS --- */
             showConnectedUI: function() {
                 if(this.role === 'receiver') {
-                    // Receptor espera
                     this.showLoading('Conectado', 'Esperando fichero del emisor...');
-                    // Hack visual: ocultar loading cuando llegue meta
                 } else {
-                    // Emisor ve Dropzone
                     document.getElementById('sender-id-wrapper').classList.add('hidden');
                     document.getElementById('drop-zone').classList.remove('hidden');
                     document.getElementById('drop-zone').classList.add('flex');
@@ -634,7 +656,6 @@
                 document.getElementById('percent-display').textContent = percent + '%';
                 document.getElementById('progress-bar').style.width = percent + '%';
                 
-                // Nombre y tamaño en pantalla de progreso
                 if(this.file || this.fileMeta) {
                      const name = this.file ? this.file.name : this.fileMeta.name;
                      const totalSize = this.file ? this.file.size : this.fileMeta.size;
@@ -656,11 +677,6 @@
                 document.getElementById('status-message').className = "text-center text-sm text-emerald-400 font-bold";
                 document.getElementById('progress-bar').className = "bg-emerald-500 h-full w-full";
                 document.getElementById('btn-reset').classList.remove('hidden');
-                
-                // Si es receptor, quitar el loading overlay si se quedó
-                if(!isSender) {
-                    // Ya debería estar en view-progress
-                }
             },
 
             showLoading: function(title, text) {
