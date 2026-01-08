@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LANshare - MQTT v5.3 (Vanilla ICE)</title>
+    <title>LANshare - MQTT v6.0 (Local Fallback)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- MQTT.js -->
@@ -42,7 +42,7 @@
                 </div>
                 <div>
                     <h1 class="text-xl font-bold tracking-tight text-white leading-none">LANshare</h1>
-                    <span class="text-[10px] text-slate-400 font-mono">v5.3 &bull; Full Gather</span>
+                    <span class="text-[10px] text-slate-400 font-mono">v6.0 &bull; Auto-Local</span>
                 </div>
             </div>
             <div id="connection-status" class="hidden text-[10px] font-mono bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-full flex items-center gap-2 border border-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
@@ -64,7 +64,7 @@
                 </div>
                 <div>
                     <h3 class="text-lg font-bold text-white mb-1" id="loading-title">Estableciendo Túnel...</h3>
-                    <p class="text-slate-400 text-xs font-mono max-w-[200px] mx-auto" id="loading-status">Recolectando rutas (Espere...)</p>
+                    <p class="text-slate-400 text-xs font-mono max-w-[200px] mx-auto" id="loading-status">Modo: Estándar (STUN)</p>
                 </div>
                 <button onclick="location.reload()" class="mt-8 text-xs text-slate-500 hover:text-white underline">Cancelar operación</button>
             </div>
@@ -73,7 +73,7 @@
             <div id="view-home" class="flex flex-col gap-4 h-full justify-center fade-in">
                 <div class="text-center mb-8">
                     <h2 class="text-2xl font-bold text-white">Transferencia Segura</h2>
-                    <p class="text-slate-400 text-sm mt-2">Protocolo P2P de alta disponibilidad.</p>
+                    <p class="text-slate-400 text-sm mt-2">Protocolo P2P con fallback local automático.</p>
                 </div>
                 
                 <button onclick="app.setRole('sender')" class="group relative p-5 rounded-xl bg-slate-800 hover:bg-blue-900/20 border border-slate-700 hover:border-blue-500 transition-all duration-300 text-left hover:shadow-lg hover:shadow-blue-500/10">
@@ -224,36 +224,32 @@
         <!-- Debug Console -->
         <div class="bg-black/90 p-3 h-32 overflow-y-auto no-scrollbar border-t border-slate-800 text-[10px] font-mono text-slate-400 select-text rounded-b-xl">
             <div id="logs" class="flex flex-col gap-1.5">
-                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1 font-bold">[Sistema] Motor WebRTC v5.3 (Vanilla ICE) listo.</div>
+                <div class="text-slate-500 border-b border-slate-800 pb-1 mb-1 font-bold">[Sistema] Motor WebRTC v6.0 (Fallback Local) listo.</div>
             </div>
         </div>
     </div>
 
     <script>
-        /* --- CONFIGURACIÓN TÉCNICA (STUN MASIVO) --- */
+        /* --- CONFIGURACIÓN TÉCNICA --- */
         const APP_CONFIG = {
             MQTT_BROKER: 'wss://broker.emqx.io:8084/mqtt', 
             CHUNK_SIZE: 64 * 1024,
             MAX_BUFFER: 16 * 1024 * 1024,
             RAM_LIMIT_WARNING: 500 * 1024 * 1024,
-            ICE_SERVERS: [
+            // Servidores STUN para el intento 1
+            ICE_SERVERS_STD: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun.ekiga.net' },
-                { urls: 'stun:stun.ideasip.com' }
-            ]
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ],
+            // Servidores vacíos para el intento 2 (Forzar Local)
+            ICE_SERVERS_LOCAL: []
         };
 
         const ADJECTIVES = ['ROJO', 'AZUL', 'VERDE', 'NEGRO', 'BLANCO', 'RAPIDO', 'LISTO', 'FELIZ', 'BRAVO', 'NOBLE'];
         const NOUNS = ['LOBO', 'GATO', 'OSO', 'HALCON', 'ZORRO', 'LEON', 'TIGRE', 'BUHO', 'DRAGON', 'PANDA'];
         
-        // --- NORMALIZADOR DE ID (FIX CRÍTICO) ---
         function normalizeId(str) {
-            return str
-                .trim()
-                .toUpperCase()
-                .normalize("NFD") // Descompone caracteres (Ó -> O + ´)
-                .replace(/[\u0300-\u036f]/g, ""); // Elimina los diacríticos (tildes)
+            return str.trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         }
 
         function generateId() {
@@ -283,6 +279,10 @@
             isRemoteDescriptionSet: false, 
             isNegotiating: false,
             
+            // Estado del Fallback
+            usingFallback: false,
+            connectionTimer: null,
+
             file: null,
             fileMeta: null,
             fileChunks: [],
@@ -311,6 +311,7 @@
                         document.getElementById('my-peer-id').textContent = this.roomId;
                         this.log(`Sala creada: ${this.roomId}`, 'success');
                         this.mqttSubscribe(`lanshare/${this.roomId}/to-sender`);
+                        this.mqttSubscribe(`lanshare/${this.roomId}/sys`); // Canal de sistema para comandos
                     });
                 } else {
                     this.showView('view-receiver');
@@ -326,9 +327,7 @@
                 const rawInput = document.getElementById('remote-id-input').value;
                 if (!rawInput) return alert("Introduce el código");
                 
-                // NORMALIZAR ID AQUÍ (FIX)
                 this.roomId = normalizeId(rawInput);
-                
                 this.showLoading('Buscando Emisor', `Conectando a sala ${this.roomId}...`);
                 
                 this.initMQTT(this.roomId, () => {
@@ -336,6 +335,7 @@
                     this.initWebRTC(); 
                     this.mqttPublish(`lanshare/${this.roomId}/to-sender`, { type: 'hello' });
                     this.mqttSubscribe(`lanshare/${this.roomId}/to-receiver`);
+                    this.mqttSubscribe(`lanshare/${this.roomId}/sys`);
                 });
             },
 
@@ -355,7 +355,14 @@
                 this.mqttClient.on('message', (topic, message) => {
                     try {
                         const data = JSON.parse(message.toString());
-                        this.handleSignalingData(data);
+                        // Comando de sistema: Forzar reinicio en modo fallback
+                        if (topic.endsWith('/sys') && data.type === 'retry-local') {
+                            this.log("⚠️ RECIBIDO COMANDO DE FALLBACK. Reiniciando en modo local...", 'error');
+                            this.usingFallback = true;
+                            this.retryConnection();
+                        } else {
+                            this.handleSignalingData(data);
+                        }
                     } catch (e) { console.error(e); }
                 });
 
@@ -378,29 +385,56 @@
 
             /* --- WEBRTC (CORE) --- */
             initWebRTC: function() {
-                if(this.peerConnection) return; // EVITAR REINICIOS
+                if(this.peerConnection) {
+                    this.peerConnection.close(); // Cerrar anterior si existe
+                }
 
-                this.log("Inicializando RTCPeerConnection...", 'info');
                 this.iceCandidateQueue = []; 
                 this.isRemoteDescriptionSet = false;
                 this.isNegotiating = false;
                 
+                // ELECCIÓN DE SERVIDORES ICE
+                const iceConfig = this.usingFallback ? APP_CONFIG.ICE_SERVERS_LOCAL : APP_CONFIG.ICE_SERVERS_STD;
+                const modeName = this.usingFallback ? "SOLO LOCAL (Sin STUN)" : "ESTÁNDAR (Con STUN)";
+                
+                this.log(`Inicializando WebRTC. Modo: ${modeName}`, 'info');
+                if(this.usingFallback) {
+                    document.getElementById('loading-status').textContent = "Reintentando en Modo Local...";
+                }
+
                 this.peerConnection = new RTCPeerConnection({
-                    iceServers: APP_CONFIG.ICE_SERVERS,
+                    iceServers: iceConfig,
                     iceTransportPolicy: 'all',
                     sdpSemantics: 'unified-plan'
                 });
+
+                // Temporizador de fallo (5 segundos)
+                if (this.connectionTimer) clearTimeout(this.connectionTimer);
+                this.connectionTimer = setTimeout(() => {
+                    if(this.peerConnection.connectionState !== 'connected' && !this.usingFallback) {
+                        this.log("Tiempo agotado. Forzando Fallback Local...", 'error');
+                        // Avisar al otro lado para que ambos cambien a la vez
+                        this.mqttPublish(`lanshare/${this.roomId}/sys`, { type: 'retry-local' });
+                        this.usingFallback = true;
+                        this.retryConnection();
+                    }
+                }, 8000); // 8s de margen
 
                 this.peerConnection.onicecandidate = (event) => {
                     if (event.candidate) {
                         const ip = event.candidate.address || event.candidate.ip || 'anónima';
                         const type = event.candidate.type; 
-                        this.log(`Candidato encontrado: ${type} (${ip})`, 'system');
                         
-                        // NOTA: Con Vanilla ICE, no enviamos esto inmediatamente.
-                        // Se enviará incrustado en el SDP cuando termine la recolección.
-                    } else {
-                        this.log("Recolección de candidatos completada (Vanilla ICE)", 'info');
+                        // En modo fallback, ignoramos candidatos públicos si por algún casual aparecen
+                        if(this.usingFallback && type === 'srflx') return;
+
+                        this.log(`Candidato: ${type} (${ip})`, 'system');
+
+                        const target = this.role === 'sender' ? 'to-receiver' : 'to-sender';
+                        this.mqttPublish(`lanshare/${this.roomId}/${target}`, {
+                            type: 'candidate',
+                            candidate: event.candidate.toJSON()
+                        });
                     }
                 };
 
@@ -409,9 +443,10 @@
                     this.log(`Estado WebRTC: ${state}`, state === 'connected' ? 'success' : 'info');
                     
                     if(state === 'connected') {
+                        clearTimeout(this.connectionTimer); // Éxito
                         this.onWebRTCConnected();
                     } else if (state === 'failed') {
-                        this.log("Fallo WebRTC. Revisa si hay candidatos HOST o SRFLX.", 'error');
+                        this.log("Fallo WebRTC.", 'error');
                     }
                 };
 
@@ -424,6 +459,25 @@
                         this.setupDataChannel();
                     };
                 }
+            },
+
+            retryConnection: function() {
+                // Reiniciar todo el proceso WebRTC pero manteniendo MQTT
+                this.initWebRTC();
+                // Si soy emisor, reinicio el handshake
+                if(this.role === 'sender') {
+                    // Pequeña pausa para asegurar que el otro lado también ha reiniciado
+                    setTimeout(() => {
+                        this.log("Reiniciando oferta en Modo Fallback...", 'info');
+                        this.createAndSendOffer();
+                    }, 1000);
+                }
+            },
+
+            createAndSendOffer: async function() {
+                const offer = await this.peerConnection.createOffer();
+                await this.peerConnection.setLocalDescription(offer);
+                this.mqttPublish(`lanshare/${this.roomId}/to-receiver`, { type: 'offer', offer: offer });
             },
 
             setupDataChannel: function() {
@@ -441,75 +495,59 @@
                 document.getElementById('connection-status').classList.add('flex');
             },
 
-            // --- HELPER: ESPERAR RECOLECCIÓN (VANILLA ICE) ---
-            waitForCandidates: async function() {
-                if(!this.peerConnection) return;
-                this.log("Esperando recolección de candidatos (1s)...", 'info');
-                
-                // Esperamos un tiempo prudencial o hasta que iceGatheringState sea 'complete'
-                return new Promise(resolve => {
-                    // Check rápido
-                    if(this.peerConnection.iceGatheringState === 'complete') {
-                        resolve(); return;
-                    }
-                    
-                    // Espera máxima de 1.5s para no eternizar
-                    setTimeout(() => {
-                        this.log("Tiempo de espera finalizado. Enviando lo que hay.", 'info');
-                        resolve();
-                    }, 1500);
-                });
-            },
-
-            /* --- NEGOCIACIÓN --- */
+            /* --- NEGOCIACIÓN (Trickle ICE Robusto) --- */
             handleSignalingData: async function(data) {
                 try {
                     if (data.type === 'hello' && this.role === 'sender') {
                         if(this.isNegotiating) return; 
                         this.isNegotiating = true;
-
-                        this.log("Receptor listo. Iniciando oferta (Vanilla ICE)...", 'info');
+                        this.log("Receptor listo. Iniciando oferta...", 'info');
                         this.initWebRTC(); 
-                        
-                        const offer = await this.peerConnection.createOffer();
-                        await this.peerConnection.setLocalDescription(offer);
-                        
-                        // ESPERAR CANDIDATOS (BLOQUEANTE)
-                        await this.waitForCandidates();
-                        
-                        // Enviar el SDP COMPLETO (con candidatos dentro)
-                        this.mqttPublish(`lanshare/${this.roomId}/to-receiver`, { 
-                            type: 'offer', 
-                            offer: this.peerConnection.localDescription 
-                        });
+                        this.createAndSendOffer();
 
                     } else if (data.type === 'offer' && this.role === 'receiver') {
-                        this.log("Oferta recibida. Configurando remoto...", 'info');
-                        this.initWebRTC();
+                        this.log("Oferta recibida.", 'info');
+                        // Asegurar init si es el primer mensaje o reinicio
+                        if(!this.peerConnection || this.peerConnection.signalingState === 'closed') {
+                            this.initWebRTC();
+                        }
                         
                         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
                         this.isRemoteDescriptionSet = true;
                         
+                        // Procesar cola inmediata
+                        await this.processIceQueue();
+                        
                         const answer = await this.peerConnection.createAnswer();
                         await this.peerConnection.setLocalDescription(answer);
-                        
-                        // ESPERAR CANDIDATOS (BLOQUEANTE)
-                        await this.waitForCandidates();
-                        
-                        this.mqttPublish(`lanshare/${this.roomId}/to-sender`, { 
-                            type: 'answer', 
-                            answer: this.peerConnection.localDescription 
-                        });
+                        this.mqttPublish(`lanshare/${this.roomId}/to-sender`, { type: 'answer', answer: answer });
 
                     } else if (data.type === 'answer' && this.role === 'sender') {
-                        this.log("Respuesta recibida. Finalizando handshake...", 'info');
+                        this.log("Respuesta recibida.", 'info');
                         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
                         this.isRemoteDescriptionSet = true;
+                        await this.processIceQueue();
+
+                    } else if (data.type === 'candidate') {
+                        const candidate = new RTCIceCandidate(data.candidate);
+                        if (this.isRemoteDescriptionSet && this.peerConnection.remoteDescription) {
+                            await this.peerConnection.addIceCandidate(candidate);
+                        } else {
+                            this.iceCandidateQueue.push(candidate);
+                        }
                     }
-                    // Nota: Ya no procesamos mensajes 'candidate' sueltos porque van en el SDP.
                 } catch (e) {
                     this.log(`Error Señalización: ${e.message}`, 'error');
                     console.error(e);
+                }
+            },
+
+            processIceQueue: async function() {
+                while(this.iceCandidateQueue.length > 0) {
+                    const candidate = this.iceCandidateQueue.shift();
+                    try {
+                        await this.peerConnection.addIceCandidate(candidate);
+                    } catch (e) { console.error(e); }
                 }
             },
 
